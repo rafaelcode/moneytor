@@ -1,282 +1,205 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { CATEGORIAS_INGRESO, CATEGORIAS_GASTO, fmt } from '../lib/flujoUtils'
 
-const CATEGORIAS = {
-  ingreso: [
-    { valor: 'sueldo',      emoji: '🏢', label: 'Sueldo / Trabajo fijo' },
-    { valor: 'freelance',   emoji: '💻', label: 'Trabajo extra / Freelance' },
-    { valor: 'bono',        emoji: '🎁', label: 'Bono o comisión' },
-    { valor: 'alquiler',    emoji: '🏠', label: 'Alquiler de propiedad' },
-    { valor: 'dividendos',  emoji: '💹', label: 'Dividendos / Intereses' },
-    { valor: 'otro_ingreso',emoji: '➕', label: 'Otro ingreso' },
-  ],
-  gasto: [
-    { valor: 'casa',        emoji: '🏘️', label: 'Casa (alquiler, luz, agua)' },
-    { valor: 'comida',      emoji: '🍔', label: 'Comida y mercado' },
-    { valor: 'transporte',  emoji: '🚗', label: 'Transporte' },
-    { valor: 'salud',       emoji: '💊', label: 'Salud' },
-    { valor: 'educacion',   emoji: '📚', label: 'Educación' },
-    { valor: 'ropa',        emoji: '👗', label: 'Ropa y personal' },
-    { valor: 'ocio',        emoji: '🎮', label: 'Diversión y ocio' },
-    { valor: 'suscripciones',emoji:'📱', label: 'Suscripciones' },
-    { valor: 'seguros',     emoji: '🛡️', label: 'Seguros' },
-    { valor: 'imprevisto',  emoji: '⚡', label: 'Imprevisto' },
-    { valor: 'otro_gasto',  emoji: '➕', label: 'Otro gasto' },
-  ],
-}
+export default function TransactionForm({
+  usuarioId,
+  onClose,
+  onGuardado,
+  tipoInicial = null,       // 'ingreso' | 'gasto' | null
+  transaccion = null,       // para editar
+}) {
+  const hoy      = new Date().toISOString().split('T')[0]
+  const esEdicion = !!transaccion
 
-export default function TransactionForm({ onClose, onGuardado, usuarioId }) {
-  const hoy = new Date().toISOString().split('T')[0]
-
-  const [tipo,        setTipo]        = useState('gasto')
-  const [monto,       setMonto]       = useState('')
-  const [categoria,   setCategoria]   = useState('')
-  const [descripcion, setDescripcion] = useState('')
-  const [fecha,       setFecha]       = useState(hoy)
+  const [tipo,        setTipo]        = useState(tipoInicial || transaccion?.tipo || 'ingreso')
+  const [categoria,   setCategoria]   = useState(transaccion?.categoria || '')
+  const [monto,       setMonto]       = useState(transaccion?.monto     || '')
+  const [descripcion, setDescripcion] = useState(transaccion?.descripcion || '')
+  const [fecha,       setFecha]       = useState(transaccion?.fecha     || hoy)
   const [loading,     setLoading]     = useState(false)
   const [error,       setError]       = useState('')
 
-  const color = tipo === 'ingreso' ? '#22c55e' : '#f97316'
+  // Si cambia el tipo, resetear categoría
+  useEffect(() => {
+    if (!esEdicion) setCategoria('')
+  }, [tipo])
+
+  const esIngreso = tipo === 'ingreso'
+  const color     = esIngreso ? '#16a34a' : '#dc2626'
+  const categorias = esIngreso ? CATEGORIAS_INGRESO : CATEGORIAS_GASTO
 
   async function guardar() {
     setError('')
-
-    if (!monto || isNaN(monto) || Number(monto) <= 0) {
-      setError('Ingresa un monto válido mayor a 0.')
-      return
-    }
-    if (!categoria) {
-      setError('Selecciona una categoría.')
-      return
-    }
-    if (!fecha) {
-      setError('Selecciona una fecha.')
-      return
-    }
+    if (!monto || Number(monto) <= 0) return setError('Ingresa un monto válido.')
+    if (!categoria)                   return setError('Selecciona una categoría.')
 
     setLoading(true)
-    const { error } = await supabase.from('transacciones').insert({
+    const payload = {
       usuario_id:  usuarioId,
       tipo,
       monto:       Number(monto),
       categoria,
-      descripcion: descripcion.trim(),
+      descripcion: descripcion.trim() || null,
       fecha,
-    })
-
-    if (error) {
-      setError('No se pudo guardar. Intenta de nuevo.')
-      console.error(error)
-    } else {
-      onGuardado()  // avisa al padre que se guardó → recarga la lista
-      onClose()
     }
+
+    let err
+    if (esEdicion) {
+      ;({ error: err } = await supabase.from('transacciones').update(payload).eq('id', transaccion.id))
+    } else {
+      ;({ error: err } = await supabase.from('transacciones').insert(payload))
+    }
+
+    if (err) { setError('No se pudo guardar. Intenta de nuevo.'); console.error(err) }
+    else     { onGuardado?.(); onClose() }
     setLoading(false)
   }
 
+  const catSel = categorias.find(c => c.valor === categoria)
+
   return (
-    /* Fondo oscuro */
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0,
-        background: 'rgba(0,0,0,0.35)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 1000, padding: 20,
-      }}
-    >
-      {/* Modal */}
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: 'white', borderRadius: 20,
-          border: '1.5px solid var(--border)',
-          padding: '28px 28px 24px',
-          width: '100%', maxWidth: 440,
-          boxShadow: '0 16px 48px rgba(0,0,0,0.15)',
-          animation: 'popIn 0.2s ease',
-        }}
-      >
+    <div onClick={onClose} style={overlay}>
+      <div onClick={e => e.stopPropagation()} style={modal}>
+
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 22 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
           <div>
-            <div style={{ fontFamily: 'Nunito', fontWeight: 900, fontSize: 18 }}>
-              {tipo === 'ingreso' ? '💵 Registrar ingreso' : '💸 Registrar gasto'}
+            <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:18 }}>
+              {esEdicion ? '✏️ Editar movimiento' : '📝 Nuevo movimiento'}
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 1 }}>
-              Completa los datos abajo
+            <div style={{ fontSize:12, color:'var(--text3)', marginTop:1 }}>
+              Registra un ingreso o gasto
             </div>
           </div>
-          <div
-            onClick={onClose}
-            style={{
-              width: 32, height: 32, borderRadius: 8,
-              background: 'var(--bg)', border: '1.5px solid var(--border)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              cursor: 'pointer', fontSize: 16, color: 'var(--text3)',
-            }}
-          >×</div>
+          <div onClick={onClose} style={closeBtn}>×</div>
         </div>
 
-        {/* Toggle ingreso / gasto */}
-        <div style={{
-          display: 'flex', background: 'var(--bg)',
-          borderRadius: 12, padding: 4,
-          border: '1.5px solid var(--border)', marginBottom: 20,
-        }}>
-          {['gasto', 'ingreso'].map(t => (
-            <div
-              key={t}
-              onClick={() => { setTipo(t); setCategoria('') }}
-              style={{
-                flex: 1, textAlign: 'center', padding: '9px',
-                borderRadius: 9, cursor: 'pointer',
-                fontSize: 13, fontWeight: 700,
-                background: tipo === t ? (t === 'ingreso' ? '#22c55e' : '#f97316') : 'transparent',
-                color: tipo === t ? 'white' : 'var(--text3)',
-                transition: 'all 0.15s',
-              }}
-            >
-              {t === 'ingreso' ? '📥 Dinero que entró' : '📤 Dinero que salió'}
-            </div>
-          ))}
-        </div>
+        {/* Tipo — solo editable si no viene pre-seleccionado */}
+        {!tipoInicial && (
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:18 }}>
+            {[
+              { v:'ingreso', e:'↑', label:'Ingreso',  c:'#16a34a' },
+              { v:'gasto',   e:'↓', label:'Gasto',    c:'#dc2626' },
+            ].map(t => (
+              <div key={t.v} onClick={() => setTipo(t.v)} style={{
+                padding:'12px', borderRadius:12, cursor:'pointer', textAlign:'center',
+                border:`2px solid ${tipo===t.v ? t.c : 'var(--border)'}`,
+                background: tipo===t.v ? `${t.c}12` : 'var(--bg)',
+                transition:'all 0.14s',
+              }}>
+                <div style={{
+                  fontSize:22, fontFamily:'Nunito', fontWeight:900,
+                  color: tipo===t.v ? t.c : 'var(--text3)',
+                }}>{t.e}</div>
+                <div style={{
+                  fontSize:13, fontWeight: tipo===t.v ? 700 : 500,
+                  color: tipo===t.v ? t.c : 'var(--text2)',
+                }}>{t.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Si viene pre-seleccionado, mostrar badge */}
+        {tipoInicial && (
+          <div style={{
+            display:'inline-flex', alignItems:'center', gap:7,
+            background:`${color}12`, border:`1.5px solid ${color}30`,
+            borderRadius:20, padding:'6px 14px', marginBottom:18,
+          }}>
+            <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:16, color }}>{esIngreso ? '↑' : '↓'}</span>
+            <span style={{ fontSize:13, fontWeight:700, color }}>
+              {esIngreso ? 'Ingreso' : 'Gasto'}
+            </span>
+          </div>
+        )}
 
         {/* Monto */}
-        <div style={{ marginBottom: 16 }}>
-          <label style={labelStyle}>💰 ¿Cuánto?</label>
-          <div style={{ position: 'relative' }}>
+        <div style={{ marginBottom:16 }}>
+          <label style={lbl}>💰 Monto</label>
+          <div style={{ position:'relative' }}>
             <span style={{
-              position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)',
-              fontFamily: 'Nunito', fontWeight: 900, fontSize: 16, color,
+              position:'absolute', left:13, top:'50%', transform:'translateY(-50%)',
+              fontFamily:'Nunito', fontWeight:900, fontSize:16, color,
             }}>S/.</span>
             <input
-              type="number"
-              placeholder="0.00"
-              value={monto}
+              type="number" value={monto}
               onChange={e => setMonto(e.target.value)}
-              min="0"
-              step="0.01"
-              style={{ ...inputStyle, paddingLeft: 46, fontSize: 18, fontWeight: 700, color }}
+              placeholder="0.00" min="0" step="0.01" autoFocus
+              style={{ ...inp, paddingLeft:50, fontSize:22, fontWeight:800, color }}
             />
           </div>
         </div>
 
-        {/* Categoría */}
-        <div style={{ marginBottom: 16 }}>
-          <label style={labelStyle}>📂 ¿En qué categoría?</label>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(2, 1fr)',
-            gap: 7,
-          }}>
-            {CATEGORIAS[tipo].map(cat => (
-              <div
-                key={cat.valor}
-                onClick={() => setCategoria(cat.valor)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: 10, cursor: 'pointer',
-                  border: `1.5px solid ${categoria === cat.valor ? color : 'var(--border)'}`,
-                  background: categoria === cat.valor ? `${color}15` : 'var(--bg)',
-                  display: 'flex', alignItems: 'center', gap: 7,
-                  fontSize: 12, fontWeight: categoria === cat.valor ? 700 : 500,
-                  color: categoria === cat.valor ? color : 'var(--text2)',
-                  transition: 'all 0.12s',
-                }}
-              >
-                <span style={{ fontSize: 15 }}>{cat.emoji}</span>
-                {cat.label}
+        {/* Categorías */}
+        <div style={{ marginBottom:16 }}>
+          <label style={lbl}>🏷️ Categoría</label>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:6 }}>
+            {categorias.map(c => (
+              <div key={c.valor} onClick={() => setCategoria(c.valor)} style={{
+                padding:'8px 6px', borderRadius:9, cursor:'pointer', textAlign:'center',
+                border:`1.5px solid ${categoria===c.valor ? c.color : 'var(--border)'}`,
+                background: categoria===c.valor ? `${c.color}12` : 'var(--bg)',
+                transition:'all 0.12s',
+              }}>
+                <div style={{ fontSize:16, marginBottom:2 }}>{c.emoji}</div>
+                <div style={{
+                  fontSize:10, fontWeight: categoria===c.valor ? 700 : 400,
+                  color: categoria===c.valor ? c.color : 'var(--text2)',
+                  lineHeight:1.3,
+                }}>{c.label}</div>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Fecha */}
-        <div style={{ marginBottom: 16 }}>
-          <label style={labelStyle}>📅 ¿Cuándo fue?</label>
-          <input
-            type="date"
-            value={fecha}
-            onChange={e => setFecha(e.target.value)}
-            style={inputStyle}
-          />
+        {/* Descripción + Fecha */}
+        <div style={{ display:'grid', gridTemplateColumns:'1.4fr 1fr', gap:10, marginBottom:16 }}>
+          <div>
+            <label style={lbl}>📝 Descripción (opcional)</label>
+            <input value={descripcion}
+              onChange={e => setDescripcion(e.target.value)}
+              placeholder={catSel ? `Ej: ${catSel.label}...` : 'Descripción del movimiento'}
+              style={inp}
+            />
+          </div>
+          <div>
+            <label style={lbl}>📅 Fecha</label>
+            <input type="date" value={fecha}
+              onChange={e => setFecha(e.target.value)} style={inp} />
+          </div>
         </div>
 
-        {/* Descripción */}
-        <div style={{ marginBottom: 20 }}>
-          <label style={labelStyle}>📝 Descripción (opcional)</label>
-          <input
-            type="text"
-            placeholder="Ej: Supermercado Wong, Freelance cliente ABC..."
-            value={descripcion}
-            onChange={e => setDescripcion(e.target.value)}
-            maxLength={120}
-            style={inputStyle}
-          />
-        </div>
-
-        {/* Error */}
         {error && (
           <div style={{
-            background: '#fef2f2', border: '1.5px solid #fecaca',
-            color: '#991b1b', borderRadius: 10,
-            padding: '10px 14px', fontSize: 13, marginBottom: 14,
-          }}>
-            ⚠️ {error}
-          </div>
+            background:'#fef2f2', border:'1.5px solid #fecaca', color:'#991b1b',
+            borderRadius:10, padding:'10px 14px', fontSize:13, marginBottom:12,
+          }}>{error}</div>
         )}
 
-        {/* Botones */}
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button
-            onClick={onClose}
-            style={{
-              flex: 1, padding: '11px',
-              background: 'var(--bg)', border: '1.5px solid var(--border)',
-              borderRadius: 10, fontSize: 13, fontWeight: 700,
-              cursor: 'pointer', color: 'var(--text2)', fontFamily: 'Poppins',
-            }}
-          >
-            Cancelar
-          </button>
-          <button
-            onClick={guardar}
-            disabled={loading}
-            style={{
-              flex: 2, padding: '11px',
-              background: loading ? '#d1d5db' : color,
-              border: 'none', borderRadius: 10,
-              fontSize: 13, fontWeight: 700,
-              cursor: loading ? 'not-allowed' : 'pointer',
-              color: 'white', fontFamily: 'Poppins',
-              boxShadow: loading ? 'none' : `0 3px 12px ${color}44`,
-              transition: 'all 0.15s',
-            }}
-          >
-            {loading ? 'Guardando...' : tipo === 'ingreso' ? '💵 Guardar ingreso' : '💸 Guardar gasto'}
+        <div style={{ display:'flex', gap:10 }}>
+          <button onClick={onClose} style={btnCancel}>Cancelar</button>
+          <button onClick={guardar} disabled={loading} style={{
+            flex:2, padding:11, border:'none', borderRadius:10,
+            background: loading ? '#d1d5db' : color,
+            color:'white', fontFamily:'Poppins', fontWeight:700,
+            fontSize:13, cursor: loading ? 'not-allowed' : 'pointer',
+            transition:'all 0.15s',
+          }}>
+            {loading ? 'Guardando...' : esEdicion
+              ? '💾 Guardar cambios'
+              : esIngreso ? '↑ Registrar ingreso' : '↓ Registrar gasto'}
           </button>
         </div>
       </div>
-
-      <style>{`
-        @keyframes popIn {
-          from { opacity: 0; transform: scale(0.95) translateY(10px); }
-          to   { opacity: 1; transform: scale(1) translateY(0); }
-        }
-      `}</style>
     </div>
   )
 }
 
-const labelStyle = {
-  fontSize: 12, fontWeight: 700,
-  color: 'var(--text2)', display: 'block', marginBottom: 8,
-}
-
-const inputStyle = {
-  width: '100%', padding: '10px 14px',
-  background: 'var(--bg)', border: '1.5px solid var(--border)',
-  borderRadius: 10, fontSize: 13, color: 'var(--text)',
-  fontFamily: 'Poppins', outline: 'none', boxSizing: 'border-box',
-}
+const overlay  = { position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20 }
+const modal    = { background:'white', borderRadius:20, border:'1.5px solid var(--border)', padding:'26px', width:'100%', maxWidth:460, boxShadow:'0 16px 48px rgba(0,0,0,0.15)' }
+const closeBtn = { width:32, height:32, borderRadius:8, background:'var(--bg)', border:'1.5px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize:18, color:'var(--text3)' }
+const lbl      = { fontSize:12, fontWeight:700, color:'var(--text2)', display:'block', marginBottom:7 }
+const inp      = { width:'100%', padding:'10px 13px', background:'var(--bg)', border:'1.5px solid var(--border)', borderRadius:10, fontSize:13, color:'var(--text)', fontFamily:'Poppins', outline:'none', boxSizing:'border-box' }
+const btnCancel= { flex:1, padding:11, background:'var(--bg)', border:'1.5px solid var(--border)', borderRadius:10, fontSize:13, fontWeight:700, cursor:'pointer', color:'var(--text2)', fontFamily:'Poppins' }
