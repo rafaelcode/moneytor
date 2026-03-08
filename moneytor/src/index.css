@@ -1,0 +1,33 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Poppins:wght@300;400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f4f6fb;
+  --white: #ffffff;
+  --border: #e8edf5;
+  --text: #1a2235;
+  --text2: #5a6a85;
+  --text3: #a0aec0;
+
+  --c-income:  #22c55e;
+  --c-expense: #f97316;
+  --c-debt:    #ef4444;
+  --c-savings: #3b82f6;
+  --c-invest:  #a855f7;
+  --c-goals:   #ec4899;
+  --c-budget:  #f59e0b;
+  --c-dash:    #6c63ff;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Poppins', sans-serif;
+}
+
+h1, h2, h3, .font-display {
+  font-family: 'Nunito', sans-serif;
+}
