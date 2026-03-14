@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { TIPOS_DEUDA_REC, proximaFechaPago, diasHastaPago } from '../lib/deudaRecurrenteUtils'
 
 /* ═══════════════════════════════════════════════════════
    HELPERS
@@ -84,6 +85,7 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
   const [cobros,      setCobros]      = useState([])
   const [txsGasto,    setTxsGasto]    = useState([])
   const [deudas,      setDeudas]      = useState([])
+  const [deudasRec,   setDeudasRec]   = useState([])
   const [pagosHechos, setPagosHechos] = useState({})
   const [lineasPres,  setLineasPres]  = useState([])
 
@@ -95,7 +97,6 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
   // UI pago
   const [marcandoPago, setMarcandoPago] = useState(null)
   const [montoPago,    setMontoPago]    = useState('')
-  const [tipoPago,     setTipoPago]     = useState('efectivo')
   const [loadingPago,  setLoadingPago]  = useState(false)
 
   useEffect(() => { cargar() }, [periodo])
@@ -110,21 +111,41 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
     const desdePer = `${anioAct}-${m}-${esQ1?'01':'16'}`
     const hastaPer = `${anioAct}-${m}-${esQ1?'15':String(ult).padStart(2,'0')}`
 
-    const [rR,cR,gR,dR,pR,pmR] = await Promise.all([
-      supabase.from('ingresos_recurrentes').select('*').eq('usuario_id',usuarioId).eq('activo',true),
-      supabase.from('cobros').select('*').eq('usuario_id',usuarioId).gte('fecha_cobro',desdeMes).lte('fecha_cobro',hastaMes),
-      supabase.from('transacciones').select('*').eq('usuario_id',usuarioId).eq('tipo','gasto').gte('fecha',desdePer).lte('fecha',hastaPer),
-      supabase.from('deudas').select('*').eq('usuario_id',usuarioId).eq('estado','activa'),
-      supabase.from('pagos_deuda').select('*').eq('usuario_id',usuarioId).gte('fecha_pago',desdeMes).lte('fecha_pago',hastaMes),
-      supabase.from('presupuesto_mes').select('*,presupuesto_mes_lineas(*)').eq('usuario_id',usuarioId).eq('mes',mesAct).eq('anio',anioAct).single(),
-    ])
-    setRec(rR.data||[])
-    setCobros(cR.data||[])
-    setTxsGasto(gR.data||[])
-    setDeudas(dR.data||[])
-    const ph={}; (pR.data||[]).forEach(p=>{ ph[p.deuda_id]=p }); setPagosHechos(ph)
-    setLineasPres(pmR.data?.presupuesto_mes_lineas||[])
-    setCargando(false)
+    try {
+      const [rR,cR,gR,dR,dRecR,pR,pmR] = await Promise.all([
+        supabase.from('ingresos_recurrentes').select('*').eq('usuario_id',usuarioId).eq('activo',true),
+        supabase.from('cobros').select('*').eq('usuario_id',usuarioId).gte('fecha_cobro',desdeMes).lte('fecha_cobro',hastaMes),
+        supabase.from('transacciones').select('*').eq('usuario_id',usuarioId).eq('tipo','gasto').gte('fecha',desdeMes).lte('fecha',hastaMes),
+        supabase.from('deudas').select('*').eq('usuario_id',usuarioId).eq('estado','activa'),
+        supabase.from('deudas_recurrentes').select('*').eq('usuario_id',usuarioId).eq('activo',true),
+        supabase.from('pagos_deuda').select('*').eq('usuario_id',usuarioId),
+        supabase.from('presupuesto_mes').select('*,presupuesto_mes_lineas(*)').eq('usuario_id',usuarioId).eq('mes',mesAct).eq('anio',anioAct).single(),
+      ])
+      
+      setRec(rR.data||[])
+      setCobros(cR.data||[])
+      setTxsGasto(gR.data||[])
+      setDeudas(dR.data||[])
+      setDeudasRec(dRecR.data||[])
+      const deudRecIds = new Set((dRecR.data||[]).map(d=>d.id))
+      const ph={}; (pR.data||[]).forEach(p=>{ 
+        if (p.deuda_recurrente_id) {
+          ph[`dr_${p.deuda_recurrente_id}`]=p
+        } else if (p.deuda_id && deudRecIds.has(p.deuda_id)) {
+          // Some schemas store recurring payments in deuda_id instead of deuda_recurrente_id
+          ph[`dr_${p.deuda_id}`]=p
+        }
+        if (p.deuda_id) ph[`d_${p.deuda_id}`]=p
+      })
+      console.log('Pagos cargados desde BD:', pR.data)
+      console.log('Pagos procesados (ph):', ph)
+      setPagosHechos(ph)
+      setLineasPres(pmR.data?.presupuesto_mes_lineas||[])
+      setCargando(false)
+    } catch (error) {
+      console.error('Error cargando datos:', error)
+      setCargando(false)
+    }
   }
 
   async function confirmarCobro(r) {
@@ -148,12 +169,139 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
     if (!montoPago||Number(montoPago)<=0) return
     setLoadingPago(true)
     const fecha = hoy.toISOString().split('T')[0]
-    await supabase.from('pagos_deuda').insert({ deuda_id:deuda.id, usuario_id:usuarioId, monto:Number(montoPago), fecha_pago:fecha, tipo_pago:tipoPago })
-    if (tipoPago!=='tarjeta_credito') {
-      await supabase.from('transacciones').insert({ usuario_id:usuarioId, tipo:'gasto', monto:Number(montoPago), categoria:'otro_gasto', descripcion:`Pago ${deuda.nombre}`, fecha })
-    }
+    await supabase.from('pagos_deuda').insert({ deuda_id:deuda.id, usuario_id:usuarioId, monto:Number(montoPago), fecha:fecha })
+    await supabase.from('transacciones').insert({ usuario_id:usuarioId, tipo:'gasto', monto:Number(montoPago), categoria:'otro_gasto', descripcion:`Pago ${deuda.nombre}`, fecha })
     await supabase.from('deudas').update({ monto_pendiente:Math.max(0,Number(deuda.monto_pendiente)-Number(montoPago)) }).eq('id',deuda.id)
-    setMarcandoPago(null); setMontoPago(''); setTipoPago('efectivo'); setLoadingPago(false); cargar()
+    setMarcandoPago(null); setMontoPago(''); setLoadingPago(false); cargar()
+  }
+
+  async function marcarPagoDeudaPuntual(deuda) {
+    const monto = Number(deuda.monto_pendiente || deuda.monto || deuda.monto_cuota || 0)
+    const fecha = hoy.toISOString().split('T')[0]
+    
+    const {data:tx, error:txError} = await supabase.from('transacciones').insert({
+      usuario_id:usuarioId, tipo:'gasto', monto, fecha,
+      categoria:'otro_gasto', descripcion:`Pago ${deuda.nombre}`,
+    }).select().single()
+    
+    if (txError) {
+      console.error('Error creando transacción:', txError)
+      return
+    }
+    
+    const {error:pagoError} = await supabase.from('pagos_deuda').insert({
+      usuario_id:usuarioId,
+      deuda_id:deuda.id,
+      monto:monto,
+      fecha:fecha,
+    })
+    
+    if (pagoError) {
+      console.error('Error guardando pago deuda:', pagoError)
+      return
+    }
+    
+    cargar()
+  }
+
+  async function marcarPagoDeudaRec(deudaRec, monto) {
+    const montoNum = Number(monto || 0)
+    const fecha = hoy.toISOString().split('T')[0]
+    
+    const {data:tx, error:txError} = await supabase.from('transacciones').insert({
+      usuario_id:usuarioId, tipo:'gasto', monto:montoNum, fecha,
+      categoria:'otro_gasto', descripcion:`Pago ${deudaRec.nombre}`,
+    }).select().single()
+    
+    if (txError) {
+      console.error('Error creando transacción:', txError)
+      return
+    }
+    
+    // Try to save with the dedicated recurring-debt foreign key column.
+    // If the column doesn't exist or the foreign key fails, we can't safely fallback.
+    // This helps uncover schema mismatch issues early.
+    const { error: err1 } = await supabase.from('pagos_deuda').insert({
+      usuario_id: usuarioId,
+      deuda_recurrente_id: deudaRec.id,
+      monto: montoNum,
+      fecha: fecha,
+    })
+
+    let pagoError = err1
+    if (err1) {
+      // Common schema issues:
+      // - PGRST204: column deuda_recurrente_id is missing in pagos_deuda
+      // - 23503: foreign key constraint failed (no matching row in deudas_recurrentes)
+      if (err1.code === 'PGRST204' && err1.message?.includes('deuda_recurrente_id')) {
+        console.error('Esquema incompleto: falta la columna deuda_recurrente_id en pagos_deuda.', err1)
+        alert('Error: no se puede registrar el pago porque falta la columna `deuda_recurrente_id` en la tabla `pagos_deuda`. Por favor actualiza el esquema. (PGRST204)')
+      } else if (err1.code === '23503' && err1.message?.includes('pagos_deuda_deuda_id_fkey')) {
+        console.error('Clave foránea fallida: el registro de deuda recurrente no existe en la tabla deudas.', err1)
+        alert('Error: no se encontró la deuda recurrente asociada. Verifica que el registro exista en la tabla `deudas_recurrentes`. (23503)')
+      }
+    }
+
+    if (pagoError) {
+      console.error('Error guardando pago deuda recurrente:', pagoError)
+      alert('No se pudo registrar el pago de la deuda recurrente. Revisa la consola para más detalles.')
+      return
+    }
+
+    cargar()
+  }
+
+  async function marcarCobroIngreso(rec, quincena) {
+    const pKey = quincena==='q1'?'quincena_1':'quincena_2'
+    const monto = quincena==='q1'?Number(rec.monto_pago_1||rec.monto_total):Number(rec.monto_pago_2||rec.monto_total)
+    const fecha = hoy.toISOString().split('T')[0]
+    
+    const {data:tx} = await supabase.from('transacciones').insert({
+      usuario_id:usuarioId, tipo:'ingreso', monto, fecha,
+      categoria:rec.tipo==='sueldo'?'sueldo':'otro_ingreso',
+      descripcion:`${rec.nombre}${quincena==='q1'?' – 1ª quincena':' – 2ª quincena'}`,
+    }).select().single()
+    
+    await supabase.from('cobros').insert({
+      usuario_id:usuarioId, ingreso_recurrente_id:rec.id, nombre:rec.nombre,
+      monto, moneda:rec.moneda||'PEN', fecha_cobro:fecha, periodo:pKey, transaccion_id:tx?.id||null,
+    })
+    cargar()
+  }
+
+  async function desmarcarCobroIngreso(cobroId, txId) {
+    await supabase.from('cobros').delete().eq('id', cobroId)
+    if (txId) await supabase.from('transacciones').delete().eq('id', txId)
+    cargar()
+  }
+
+  async function desmarcarPagoDeuda(pagoId) {
+    // Obtener los datos del pago para buscar la transacción asociada
+    const {data:pagoData} = await supabase.from('pagos_deuda').select('*').eq('id', pagoId).single()
+    
+    // Eliminar la transacción asociada si existe
+    if (pagoData) {
+      const {data:txs} = await supabase.from('transacciones')
+        .select('*')
+        .eq('usuario_id', usuarioId)
+        .eq('tipo', 'gasto')
+        .eq('monto', pagoData.monto)
+        .eq('fecha', pagoData.fecha)
+        .ilike('descripcion', '%Pago%')
+      
+      if (txs && txs.length > 0) {
+        await supabase.from('transacciones').delete().eq('id', txs[0].id)
+      }
+    }
+    
+    // Eliminar el registro de pago
+    const {error:delError} = await supabase.from('pagos_deuda').delete().eq('id', pagoId)
+    if (delError) {
+      console.error('Error eliminando pago:', delError)
+      return
+    }
+    
+    cargar()
   }
 
   /* ── Cálculos ─────────────────────────────────────────── */
@@ -167,13 +315,40 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
   const totalGastos  = txsGasto.reduce((s,t)=>s+Number(t.monto),0)
   const totalPres    = lineasPres.reduce((s,l)=>s+Number(l.monto_limite),0)/2
 
+  const saldoReal = totalCobrado - totalGastos
+
   const oblEsta      = deudas.filter(d=>d.dia_pago_mes&&(esQ1?d.dia_pago_mes<=15:d.dia_pago_mes>15))
   const oblSig       = deudas.filter(d=>d.dia_pago_mes&&(esQ1?d.dia_pago_mes>15:d.dia_pago_mes<=15))
   const totalOblEsta = oblEsta.reduce((s,d)=>s+Number(d.monto_cuota||0),0)
   const totalOblSig  = oblSig.reduce((s,d)=>s+Number(d.monto_cuota||0),0)
-  const pagosEfect   = oblEsta.filter(d=>pagosHechos[d.id]&&pagosHechos[d.id].tipo_pago!=='tarjeta_credito').reduce((s,d)=>s+Number(pagosHechos[d.id].monto),0)
-  const pagosTC      = oblEsta.filter(d=>pagosHechos[d.id]?.tipo_pago==='tarjeta_credito').reduce((s,d)=>s+Number(pagosHechos[d.id].monto),0)
-  const libre        = totalCobrado - totalGastos - pagosEfect
+
+  // Obligaciones recurrentes del período (para Saldo Final)
+  const deudRecPer = deudasRec.filter(dr => dr.frecuencia==='quincenal' || (dr.frecuencia==='mensual'&&esQ1))
+  const totalOblRecPer = deudRecPer.reduce((s,dr)=>{
+    const m = (dr.frecuencia==='quincenal' && esQ1) ? dr.monto_pago_1||dr.monto_total
+            : (dr.frecuencia==='quincenal' && !esQ1) ? dr.monto_pago_2||dr.monto_total
+            : dr.monto_total
+    return s+Number(m||0)
+  },0)
+
+  // Deudas puntuales pendientes de pago (no solo el período actual)
+  const deudasPendientes = deudas.reduce((s,d)=>{
+    const pagado = !!pagosHechos[`d_${d.id}`]
+    if (pagado) return s
+    return s + Number(d.monto_pendiente || d.monto_cuota || 0)
+  },0)
+
+  const obligacionesRecPendientes = deudRecPer.reduce((s,dr)=>{
+    const pagado = !!pagosHechos[`dr_${dr.id}`]
+    if (pagado) return s
+    const m = (dr.frecuencia==='quincenal' && esQ1) ? dr.monto_pago_1||dr.monto_total
+            : (dr.frecuencia==='quincenal' && !esQ1) ? dr.monto_pago_2||dr.monto_total
+            : dr.monto_total
+    return s + Number(m||0)
+  },0)
+
+  const totalObligacionesPeriodo = deudasPendientes + obligacionesRecPendientes
+  const libre        = saldoReal - totalObligacionesPeriodo
   const alcanza      = totalCobrado >= totalOblEsta
   const pctGastos    = totalCobrado>0 ? (totalGastos/totalCobrado)*100 : 0
 
@@ -204,225 +379,350 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8, marginBottom:12 }}>
           <div>
             <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:20, letterSpacing:'-0.4px' }}>{saludoHora()} 👋</div>
-            <div style={{ fontSize:11, color:'var(--text3)', marginTop:1 }}>
-              {hoy.toLocaleDateString('es-PE',{weekday:'long',day:'numeric',month:'long'})}
+            <div style={{ fontSize:11, color:'var(--text3)', marginTop:4, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+              <span>
+                {hoy.toLocaleDateString('es-PE',{weekday:'long',day:'numeric'})}
+              </span>
+              <span style={{
+                background:'linear-gradient(135deg,#6c63ff,#8b5cf6)',
+                color:'white',
+                padding:'4px 10px',
+                borderRadius:8,
+                fontWeight:900,
+                fontSize:12,
+                textTransform:'capitalize',
+                letterSpacing:'0.5px',
+                boxShadow:'0 2px 8px rgba(108,99,255,0.3)'
+              }}>
+                {MESES[hoy.getMonth()]}
+              </span>
+              <span>{anioAct}</span>
             </div>
           </div>
           <button onClick={()=>onNavigate('quincena_resumen')} style={{ fontSize:11, fontWeight:700, color:'#6c63ff', background:'#f5f3ff', border:'1.5px solid #c4b5fd', borderRadius:8, padding:'6px 12px' }}>
             📊 Ver detalle
           </button>
         </div>
-
-        {/* Selector período — scroll horizontal en mobile */}
-        <div style={{ display:'flex', background:'var(--bg)', borderRadius:12, border:'1.5px solid var(--border)', overflow:'hidden', alignSelf:'flex-start' }}>
-          {[{v:'q1',l:'🌓 1ª quincena'},{v:'q2',l:'🌕 2ª quincena'}].map(p=>(
-            <div key={p.v} onClick={()=>setPeriodo(p.v)} style={{ flex:1, padding:'9px 16px', cursor:'pointer', fontSize:12, fontWeight:700, textAlign:'center', background:periodo===p.v?'#6c63ff':'transparent', color:periodo===p.v?'white':'var(--text2)', transition:'all 0.13s', whiteSpace:'nowrap' }}>
-              {p.l}
-              {periodo===p.v && diaHoy<=(p.v==='q1'?15:31) && diaHoy>(p.v==='q1'?0:15) && (
-                <span style={{ marginLeft:5, fontSize:9, background:'#ffffff30', padding:'1px 5px', borderRadius:20 }}>HOY</span>
-              )}
-            </div>
-          ))}
-        </div>
       </div>
 
-      {/* ══ BANNER COBRAR ════════════════════════════════════ */}
-      {recPer.length>0 && !todosCobraron && (
-        <div style={{ background:'linear-gradient(135deg,#fffbeb,#fef3c7)', border:'2px solid #fbbf24', borderRadius:14, padding:'13px 16px', marginBottom:16 }}>
-          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
-            <span style={{ fontSize:24 }}>💰</span>
-            <div>
-              <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, color:'#92400e' }}>¿Ya cobraste tu {esQ1?'primera':'segunda'} quincena?</div>
-              <div style={{ fontSize:11, color:'#b45309' }}>Pendiente: <strong>{S0(totalEsperado-totalCobrado)}</strong></div>
-            </div>
-          </div>
-          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-            {recPer.filter(r=>!cobrosPer.some(c=>c.ingreso_recurrente_id===r.id)).map(r=>(
-              <div key={r.id}>
-                {cobrandoRec===r.id ? (
-                  <div style={{ display:'flex', gap:6, alignItems:'center', background:'white', borderRadius:10, padding:'7px 10px', border:'1.5px solid #fbbf24' }}>
-                    <div style={{ position:'relative' }}>
-                      <span style={{ position:'absolute', left:7, top:'50%', transform:'translateY(-50%)', fontSize:11, fontWeight:700, color:'#16a34a' }}>S/.</span>
-                      <input type="number" value={montoCobro} onChange={e=>setMontoCobro(e.target.value)} autoFocus
-                        style={{ width:90, padding:'6px 6px 6px 28px', border:'1.5px solid #86efac', borderRadius:8, fontWeight:700, color:'#16a34a', outline:'none' }}/>
-                    </div>
-                    <button onClick={()=>confirmarCobro(r)} disabled={loadingCob}
-                      style={{ padding:'6px 12px', background:'#16a34a', color:'white', border:'none', borderRadius:8, fontSize:12, fontWeight:700 }}>
-                      {loadingCob?'…':'✓'}
-                    </button>
-                    <button onClick={()=>setCobrandoRec(null)}
-                      style={{ padding:'6px 9px', background:'white', border:'1.5px solid var(--border)', borderRadius:8, fontSize:12 }}>✕</button>
-                  </div>
-                ) : (
-                  <button onClick={()=>{
-                    setCobrandoRec(r.id)
-                    setMontoCobro(String(esQ1?Number(r.monto_pago_1||r.monto_total):Number(r.monto_pago_2||r.monto_total)))
-                  }} style={{ padding:'8px 16px', background:'#d97706', color:'white', border:'none', borderRadius:9, fontSize:12, fontWeight:700, boxShadow:'0 2px 8px rgba(217,119,6,0.35)' }}>
-                    💸 Cobrar {r.nombre}
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ══ KPIs ═════════════════════════════════════════════ */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:14 }}>
-
+      {/* ══ KPIs PRINCIPALES ═════════════════════════════════ */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12, marginBottom:18 }}>
         {/* Cobrado */}
-        <div style={{ background:'linear-gradient(135deg,#f0fdf4,#dcfce7)', border:'1.5px solid #86efac', borderRadius:14, padding:'12px 14px' }}>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
-            <span style={{ fontSize:10, fontWeight:700, color:'#166534', textTransform:'uppercase', letterSpacing:'0.4px' }}>💰 Cobrado</span>
-            <span style={{ fontSize:9, fontWeight:700, padding:'2px 7px', borderRadius:20, background:todosCobraron?'#16a34a':'#d97706', color:'white' }}>
-              {todosCobraron ? '✓' : `${cobrosPer.length}/${recPer.length}`}
-            </span>
-          </div>
-          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:20, color:'#16a34a', letterSpacing:'-0.5px' }}>{S0(totalCobrado)}</div>
-          {totalEsperado>totalCobrado && <div style={{ fontSize:10, color:'#166534', marginTop:3 }}>Falta: {S0(totalEsperado-totalCobrado)}</div>}
-          {totalEsperado>0&&<div style={{ marginTop:6, height:3, background:'#bbf7d0', borderRadius:999 }}><div style={{ height:'100%', width:`${Math.min((totalCobrado/totalEsperado)*100,100)}%`, background:'#16a34a', borderRadius:999, transition:'width 0.5s' }}/></div>}
+        <div style={{ background:'linear-gradient(135deg,#f0fdf4,#dcfce7)', border:'1.5px solid #86efac', borderRadius:14, padding:'14px' }}>
+          <div style={{ fontSize:10, fontWeight:700, color:'#166534', textTransform:'uppercase', marginBottom:6 }}>💰 Cobrado</div>
+          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:18, color:'#16a34a', marginBottom:2 }}>{S0(totalCobrado)}</div>
+          <div style={{ fontSize:10, color:'#166534' }}>{cobrosPer.length}/{recPer.length} cuotas</div>
         </div>
 
         {/* Gastos */}
-        <div style={{ background:'linear-gradient(135deg,#fef2f2,#fee2e2)', border:'1.5px solid #fca5a5', borderRadius:14, padding:'12px 14px' }}>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
-            <span style={{ fontSize:10, fontWeight:700, color:'#991b1b', textTransform:'uppercase', letterSpacing:'0.4px' }}>💸 Gastos</span>
-            <MiniDonut pct={pctGastos} color={pctGastos>=90?'#dc2626':'#f97316'} size={40} stroke={6}/>
-          </div>
-          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:20, color:'#dc2626', letterSpacing:'-0.5px' }}>{S0(totalGastos)}</div>
-          <div style={{ fontSize:10, color:'#991b1b', marginTop:3 }}>{pctGastos.toFixed(0)}% del cobrado</div>
+        <div style={{ background:'linear-gradient(135deg,#fef2f2,#fee2e2)', border:'1.5px solid #fca5a5', borderRadius:14, padding:'14px' }}>
+          <div style={{ fontSize:10, fontWeight:700, color:'#991b1b', textTransform:'uppercase', marginBottom:6 }}>💸 Gastos</div>
+          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:18, color:'#dc2626', marginBottom:2 }}>{S0(totalGastos)}</div>
+          <div style={{ fontSize:10, color:'#991b1b' }}>{pctGastos.toFixed(0)}% del cobrado</div>
         </div>
 
-        {/* Libre */}
-        <div style={{ background: libre>=0?'linear-gradient(135deg,#eff6ff,#dbeafe)':'linear-gradient(135deg,#fef2f2,#fee2e2)', border:`1.5px solid ${libre>=0?'#93c5fd':'#fca5a5'}`, borderRadius:14, padding:'12px 14px' }}>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
-            <span style={{ fontSize:10, fontWeight:700, color:libre>=0?'#1e40af':'#991b1b', textTransform:'uppercase', letterSpacing:'0.4px' }}>{libre>=0?'✨ Libre':'⚠️ Falta'}</span>
-            <span style={{ fontSize:9, fontWeight:700, padding:'2px 7px', borderRadius:20, background:alcanza?'#16a34a':'#dc2626', color:'white' }}>
-              {alcanza?'✅':'❌'}
-            </span>
-          </div>
-          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:20, color:libre>=0?'#2563eb':'#dc2626', letterSpacing:'-0.5px' }}>{S0(Math.abs(libre))}</div>
-          {/* Ecuación mini */}
-          <div style={{ fontSize:9, color:'var(--text3)', marginTop:3, display:'flex', gap:3, flexWrap:'wrap' }}>
-            <span style={{color:'#16a34a',fontWeight:700}}>{S0(totalCobrado)}</span><span>−</span>
-            <span style={{color:'#dc2626',fontWeight:700}}>{S0(totalGastos)}</span><span>−</span>
-            <span style={{color:'#d97706',fontWeight:700}}>{S0(pagosEfect)}</span>
-          </div>
+        {/* Saldo Real */}
+        <div style={{ background:'linear-gradient(135deg,#eff6ff,#dbeafe)', border:'1.5px solid #93c5fd', borderRadius:14, padding:'14px' }}>
+          <div style={{ fontSize:10, fontWeight:700, color:'#1e40af', textTransform:'uppercase', marginBottom:6 }}>💵 Saldo Real</div>
+          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:18, color:'#2563eb', marginBottom:2 }}>{S0(totalCobrado - totalGastos)}</div>
+          <div style={{ fontSize:10, color:'#1e40af' }}>{totalCobrado - totalGastos >= 0 ? '✅' : '⚠️'}</div>
+        </div>
+
+        {/* Saldo Final */}
+        <div style={{ background:libre>=0?'linear-gradient(135deg,#f0f9ff,#e0f2fe)':'linear-gradient(135deg,#fef2f2,#fee2e2)', border:`1.5px solid ${libre>=0?'#0284c7':'#fca5a5'}`, borderRadius:14, padding:'14px' }}>
+          <div style={{ fontSize:10, fontWeight:700, color:libre>=0?'#0c4a6e':'#991b1b', textTransform:'uppercase', marginBottom:6 }}>{libre>=0?'✨ Saldo Final':'⚠️ Falta'}</div>
+          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:18, color:libre>=0?'#0369a1':'#dc2626', marginBottom:2 }}>{S0(libre)}</div>
+          <div style={{ fontSize:9, color:'var(--text3)' }}>Saldo real - deudas pendientes</div>
         </div>
       </div>
 
-      {/* ══ GRÁFICO + OBLIGACIONES (split responsivo) ════════ */}
-      <div className="g2" style={{ marginBottom:14 }}>
+      {/* ══════════════════════════════════════════════════════════
+          FLUJO DE CAJA & MOVIMIENTOS
+      ══════════════════════════════════════════════════════════ */}
+      <div style={{ display:'grid', gap:14, marginBottom:16 }}>
 
-        {/* Gráfico */}
-        <div className="card">
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
-            <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:13 }}>📊 Ingresos vs Gastos</div>
-            <button onClick={()=>onNavigate('flujo_dashboard')} style={{ fontSize:10, fontWeight:700, color:'#6c63ff', background:'none', border:'none' }}>Ver →</button>
-          </div>
-          <BarChart ingreso={totalCobrado} gasto={totalGastos} presupuesto={totalPres||null}/>
-          <div style={{ marginTop:10 }}>
-            {[
-              {label:'Gastos',   v:totalGastos,          color:'#dc2626', pct:totalCobrado>0?(totalGastos/totalCobrado)*100:0},
-              {label:'Pagos',    v:pagosEfect,            color:'#d97706', pct:totalCobrado>0?(pagosEfect/totalCobrado)*100:0},
-              {label:'Libre',    v:Math.max(0,libre),     color:'#2563eb', pct:totalCobrado>0?(Math.max(0,libre)/totalCobrado)*100:0},
-            ].map(r=>(
-              <div key={r.label} style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5 }}>
-                <div style={{ width:3, height:12, background:r.color, borderRadius:2, flexShrink:0 }}/>
-                <span style={{ flex:1, fontSize:11, color:'var(--text2)' }}>{r.label}</span>
-                <span style={{ fontFamily:'Nunito', fontWeight:700, fontSize:11, color:r.color }}>{S0(r.v)}</span>
-                <span style={{ fontSize:10, color:'var(--text3)', width:28, textAlign:'right' }}>{r.pct.toFixed(0)}%</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* ────── FLUJO DE CAJA + MOVIMIENTOS (full width) ────── */}
+        <div style={{ display:'grid', gap:14 }}>
 
-        {/* Obligaciones esta quincena */}
-        <div className="card">
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-            <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:13 }}>💳 Obligaciones</div>
-            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-              <span style={{ fontSize:10, color:'var(--text3)' }}>{oblEsta.filter(d=>pagosHechos[d.id]).length}/{oblEsta.length}</span>
-              <button onClick={()=>onNavigate('deudas')} style={{ fontSize:10, fontWeight:700, color:'#6c63ff', background:'none', border:'none' }}>Ver →</button>
+          {/* Flujo de caja */}
+          <div style={{ background:'white', borderRadius:16, border:'1.5px solid var(--border)', padding:'16px', boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
+            <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, marginBottom:12, color:'#16a34a' }}>
+              💧 Flujo de caja
             </div>
-          </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:12 }}>
 
-          {/* Barra progreso */}
-          {oblEsta.length>0&&(
-            <div style={{ height:4, background:'var(--bg)', borderRadius:999, marginBottom:10, border:'1px solid var(--border)' }}>
-              <div style={{ height:'100%', width:`${oblEsta.length>0?(oblEsta.filter(d=>pagosHechos[d.id]).length/oblEsta.length)*100:0}%`, background:'#16a34a', borderRadius:999, transition:'width 0.5s' }}/>
-            </div>
-          )}
-
-          {oblEsta.length===0 ? (
-            <div style={{ textAlign:'center', padding:'16px 0', fontSize:12, color:'var(--text3)' }}>✅ Sin obligaciones</div>
-          ) : (
-            <div style={{ maxHeight:220, overflowY:'auto', display:'flex', flexDirection:'column', gap:5 }}>
-              {oblEsta.map(deuda => {
-                const pagado = !!pagosHechos[deuda.id]
-                const pago   = pagosHechos[deuda.id]
-                const esTarj = pago?.tipo_pago==='tarjeta_credito'
-                const dias   = deuda.dia_pago_mes ? deuda.dia_pago_mes-diaHoy : null
-                const info   = dias!==null ? labelDias(dias) : null
-                const urg    = dias!==null&&dias<=3&&!pagado
-                return (
-                  <div key={deuda.id}>
-                    <div style={{ borderRadius:10, border:`1.5px solid ${pagado?'#86efac':urg?'#fca5a5':'var(--border)'}`, background:pagado?'#f0fdf4':urg?'#fef2f2':'white', padding:'9px 11px', transition:'all 0.13s' }}>
-                      <div style={{ display:'flex', alignItems:'center', gap:9 }}>
-                        <div onClick={()=>!pagado&&setMarcandoPago(marcandoPago===deuda.id?null:deuda.id)}
-                          style={{ width:21, height:21, borderRadius:6, flexShrink:0, cursor:pagado?'default':'pointer', border:`2px solid ${pagado?'#16a34a':'#d1d5db'}`, background:pagado?'#16a34a':'white', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                          {pagado&&<span style={{fontSize:11,color:'white',fontWeight:900}}>✓</span>}
-                        </div>
-                        <div style={{ flex:1, minWidth:0 }}>
-                          <div style={{ display:'flex', alignItems:'center', gap:5, flexWrap:'wrap' }}>
-                            <span style={{ fontWeight:700, fontSize:12, textDecoration:pagado?'line-through':'', color:pagado?'#94a3b8':'var(--text)' }}>{deuda.nombre}</span>
-                            {info&&!pagado&&<span style={{ fontSize:9, fontWeight:700, color:info.color, background:`${info.color}15`, padding:'1px 5px', borderRadius:20 }}>{info.txt}</span>}
-                            {esTarj&&<span style={{ fontSize:9, fontWeight:700, color:'#7c3aed', background:'#f5f3ff', padding:'1px 5px', borderRadius:20 }}>💳</span>}
-                          </div>
-                          {deuda.dia_pago_mes&&<div style={{ fontSize:10, color:'var(--text3)' }}>día {deuda.dia_pago_mes}</div>}
-                        </div>
-                        <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, color:pagado?'#16a34a':'#dc2626', flexShrink:0 }}>
-                          {S0(pago?.monto||deuda.monto_cuota||deuda.monto_pendiente)}
-                        </div>
-                      </div>
-
-                      {/* Panel pago */}
-                      {!pagado&&marcandoPago===deuda.id&&(
-                        <div style={{ marginTop:8, background:'var(--bg)', borderRadius:9, padding:'9px 10px', border:'1px solid var(--border)' }}>
-                          <div className="chips" style={{ marginBottom:7 }}>
-                            {[{v:'efectivo',l:'💵 Efectivo'},{v:'transferencia',l:'📲 Transf.'},{v:'tarjeta_debito',l:'💳 Débito'},{v:'tarjeta_credito',l:'💳 Crédito'}].map(t=>(
-                              <div key={t.v} onClick={()=>setTipoPago(t.v)} style={{ padding:'4px 9px', borderRadius:6, cursor:'pointer', fontSize:10, fontWeight:700, flexShrink:0, background:tipoPago===t.v?'#6c63ff':'white', color:tipoPago===t.v?'white':'var(--text2)', border:`1.5px solid ${tipoPago===t.v?'#6c63ff':'var(--border)'}` }}>{t.l}</div>
-                            ))}
-                          </div>
-                          {tipoPago==='tarjeta_credito'&&<div style={{ fontSize:10, color:'#7c3aed', fontWeight:600, marginBottom:7, background:'#f5f3ff', borderRadius:7, padding:'4px 8px' }}>💳 No descuenta del flujo</div>}
-                          <div style={{ display:'flex', gap:5 }}>
-                            <div style={{ position:'relative', flex:1 }}>
-                              <span style={{ position:'absolute', left:7, top:'50%', transform:'translateY(-50%)', fontSize:10, fontWeight:700, color:'#dc2626' }}>S/.</span>
-                              <input type="number" value={montoPago} onChange={e=>setMontoPago(e.target.value)} placeholder={String(deuda.monto_cuota||'')} autoFocus min="0"
-                                style={{ width:'100%', padding:'7px 6px 7px 24px', border:'1.5px solid #fca5a5', borderRadius:7, fontWeight:700, color:'#dc2626', outline:'none', background:'white' }}/>
-                            </div>
-                            <button onClick={()=>confirmarPago(deuda)} disabled={loadingPago}
-                              style={{ padding:'7px 11px', background:'#16a34a', color:'white', border:'none', borderRadius:7, fontSize:11, fontWeight:700, whiteSpace:'nowrap' }}>
-                              {loadingPago?'…':'✅'}
-                            </button>
-                            <button onClick={()=>{setMarcandoPago(null);setMontoPago('')}}
-                              style={{ padding:'7px 8px', background:'white', border:'1.5px solid var(--border)', borderRadius:7, fontSize:11 }}>✕</button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+              {/* Ingresos recurrentes */}
+              <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
+                <div style={{ fontSize:12, fontWeight:700, marginBottom:10 }}>💰 Ingresos recurrentes</div>
+                {rec.length===0 ? (
+                  <div style={{ textAlign:'center', padding:'18px 0', fontSize:12, color:'var(--text3)' }}>
+                    Sin ingresos configurados. Configura en Flujo de Caja.
                   </div>
-                )
-              })}
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:8, maxHeight:250, overflowY:'auto', paddingRight:6 }}>
+                    {rec.map(r => {
+                      const cobroQ1 = cobros.find(c => c.ingreso_recurrente_id===r.id && c.periodo==='quincena_1')
+                      const cobroQ2 = cobros.find(c => c.ingreso_recurrente_id===r.id && c.periodo==='quincena_2')
+                      const cobroMes = cobros.find(c => c.ingreso_recurrente_id===r.id && c.periodo==='mes_completo')
+                      return (
+                        <div key={r.id}>
+                          <div style={{ fontWeight:700, fontSize:12, marginBottom:6, color:'var(--text)' }}>{r.nombre}</div>
+                          {r.frecuencia==='quincenal' ? (
+                            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                              {[
+                                { q:'q1', label:'Q1 (1-15)', monto:r.monto_pago_1, cobro:cobroQ1 },
+                                { q:'q2', label:'Q2 (16-31)', monto:r.monto_pago_2, cobro:cobroQ2 },
+                              ].map(item => (
+                                <div key={item.q}
+                                  style={{
+                                    display:'flex', alignItems:'center', gap:6,
+                                    padding:'8px 10px', borderRadius:9,
+                                    background:item.cobro?'#f0fdf4':'var(--bg)',
+                                    border:`1.5px solid ${item.cobro?'#86efac':'var(--border)'}`,
+                                    transition:'all 0.2s',
+                                  }}>
+                                  <div onClick={() => !item.cobro && marcarCobroIngreso(r, item.q)}
+                                    style={{
+                                      display:'flex', alignItems:'center', gap:6,
+                                      cursor:item.cobro?'default':'pointer',
+                                      flex:1,
+                                    }}>
+                                    <div style={{
+                                      width:18, height:18, borderRadius:5, flexShrink:0,
+                                      border:`2px solid ${item.cobro?'#16a34a':'#d1d5db'}`,
+                                      background:item.cobro?'#16a34a':'white',
+                                      display:'flex', alignItems:'center', justifyContent:'center',
+                                    }}>
+                                      {item.cobro && <span style={{fontSize:10, color:'white', fontWeight:900}}>✓</span>}
+                                    </div>
+                                    <div style={{ flex:1, minWidth:0 }}>
+                                      <div style={{ fontSize:10, fontWeight:600, color:'var(--text2)' }}>{item.label}</div>
+                                      <div style={{ fontSize:11, fontWeight:700, color:item.cobro?'#16a34a':'#666' }}>{S0(item.monto)}</div>
+                                    </div>
+                                  </div>
+                                  {item.cobro && (
+                                    <button onClick={() => desmarcarCobroIngreso(item.cobro.id, item.cobro.transaccion_id)}
+                                      style={{ padding:'4px 6px', borderRadius:5, background:'#fca5a5', border:'none', color:'white', fontSize:11, fontWeight:700, cursor:'pointer' }}>
+                                      ✕
+                                    </button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div
+                              style={{
+                                display:'flex', alignItems:'center', gap:6,
+                                padding:'8px 10px', borderRadius:9,
+                                background:cobroMes?'#f0fdf4':'var(--bg)',
+                                border:`1.5px solid ${cobroMes?'#86efac':'var(--border)'}`,
+                                transition:'all 0.2s',
+                              }}>
+                              <div onClick={() => !cobroMes && marcarCobroIngreso(r, 'mes_completo')}
+                                style={{
+                                  display:'flex', alignItems:'center', gap:6,
+                                  cursor:cobroMes?'default':'pointer',
+                                  flex:1,
+                                }}>
+                                <div style={{
+                                  width:18, height:18, borderRadius:5, flexShrink:0,
+                                  border:`2px solid ${cobroMes?'#16a34a':'#d1d5db'}`,
+                                  background:cobroMes?'#16a34a':'white',
+                                  display:'flex', alignItems:'center', justifyContent:'center',
+                                }}>
+                                  {cobroMes && <span style={{fontSize:10, color:'white', fontWeight:900}}>✓</span>}
+                                </div>
+                                <div style={{ flex:1, minWidth:0 }}>
+                                  <div style={{ fontSize:10, fontWeight:600, color:'var(--text2)' }}>Mes completo</div>
+                                  <div style={{ fontSize:11, fontWeight:700, color:cobroMes?'#16a34a':'#666' }}>{S0(r.monto_total)}</div>
+                                </div>
+                              </div>
+                              {cobroMes && (
+                                <button onClick={() => desmarcarCobroIngreso(cobroMes.id, cobroMes.transaccion_id)}
+                                  style={{ padding:'4px 6px', borderRadius:5, background:'#fca5a5', border:'none', color:'white', fontSize:11, fontWeight:700, cursor:'pointer' }}>
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Gastos recurrentes */}
+              <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
+                <div style={{ fontSize:12, fontWeight:700, marginBottom:10 }}>💸 Gastos recurrentes</div>
+                {deudRecPer.length === 0 ? (
+                  <div style={{ textAlign:'center', padding:'18px 0', fontSize:12, color:'var(--text3)' }}>
+                    Sin gastos recurrentes para este período.
+                  </div>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:8, maxHeight:250, overflowY:'auto', paddingRight:6 }}>
+                    {deudRecPer.sort((a,b)=>{
+                      const pagA=!!pagosHechos[`dr_${a.id}`];
+                      const pagB=!!pagosHechos[`dr_${b.id}`];
+                      return pagA - pagB;
+                    }).map(dr=>{
+                      const monto = (dr.frecuencia==='quincenal' && esQ1) ? Number(dr.monto_pago_1||dr.monto_total||0)
+                                  : (dr.frecuencia==='quincenal' && !esQ1) ? Number(dr.monto_pago_2||dr.monto_total||0)
+                                  : Number(dr.monto_total||0)
+                      const pagado = !!pagosHechos[`dr_${dr.id}`]
+                      const tipoInfo = TIPOS_DEUDA_REC.find(t=>t.valor===dr.tipo) || {emoji:'💳', color:'#7c3aed'}
+                      return (
+                        <div key={dr.id}
+                          style={{
+                            display:'flex', alignItems:'center', gap:6,
+                            padding:'6px 8px', borderRadius:7,
+                            background:pagado?'#f0fdf4':'var(--bg)',
+                            border:`1px solid ${pagado?'#86efac':'var(--border)'}`,
+                            transition:'all 0.2s',
+                            cursor:pagado?'default':'pointer',
+                          }}
+                          onClick={() => !pagado && marcarPagoDeudaRec(dr, monto)}>
+                          <div style={{
+                            width:16, height:16, borderRadius:4, flexShrink:0,
+                            border:`1.5px solid ${pagado?'#16a34a':'#d1d5db'}`,
+                            background:pagado?'#16a34a':'white',
+                            display:'flex', alignItems:'center', justifyContent:'center',
+                            fontSize:8,
+                          }}>
+                            {pagado && <span style={{color:'white', fontWeight:900}}>✓</span>}
+                          </div>
+                          <div style={{ fontSize:13, flexShrink:0, opacity:pagado?0.5:1 }}>{tipoInfo.emoji}</div>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize:9, fontWeight:600, color:'var(--text2)', textDecoration:pagado?'line-through':'none' }}>{dr.nombre||'Sin nombre'}</div>
+                            <div style={{ fontSize:10, fontWeight:700, color:pagado?'#16a34a':'#7c3aed' }}>{S0(monto)}</div>
+                          </div>
+                          {pagado && (
+                            <button onClick={(e) => {
+                              e.stopPropagation()
+                              desmarcarPagoDeuda(pagosHechos[`dr_${dr.id}`].id)
+                            }}
+                              style={{ padding:'3px 5px', borderRadius:4, background:'#fca5a5', border:'none', color:'white', fontSize:10, fontWeight:700, cursor:'pointer', flexShrink:0 }}>
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
-          )}
-          {/* Total */}
-          <div style={{ display:'flex', justifyContent:'space-between', marginTop:8, padding:'7px 10px', background:'var(--bg)', borderRadius:9, border:'1px solid var(--border)' }}>
-            <span style={{ fontSize:11, fontWeight:600, color:'var(--text2)' }}>Total obligaciones</span>
-            <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:13, color:'#dc2626' }}>{S0(totalOblEsta)}</span>
           </div>
+
+          {/* Movimientos */}
+          <div style={{ background:'white', borderRadius:16, border:'1.5px solid var(--border)', padding:'16px', boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
+            <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, marginBottom:12, color:'#6c63ff' }}>
+              📌 Movimientos
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:12 }}>
+
+              {/* Ingresos del mes */}
+              <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
+                <div style={{ fontSize:12, fontWeight:700, marginBottom:10 }}>💰 Ingresos del mes</div>
+                {cobros.length===0 ? (
+                  <div style={{ textAlign:'center', padding:'18px 0', fontSize:12, color:'var(--text3)' }}>
+                    Sin cobros registrados.
+                  </div>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:6, maxHeight:210, overflowY:'auto', paddingRight:6 }}>
+                    {cobros.map(c => (
+                      <div key={c.id} style={{ display:'flex', justifyContent:'space-between', fontSize:12, color:'var(--text2)' }}>
+                        <div style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.nombre || c.descripcion || 'Ingreso'}</div>
+                        <div style={{ fontWeight:700, color:'#16a34a', marginLeft:10 }}>{S0(c.monto)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Gastos pagados */}
+              <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
+                <div style={{ fontSize:12, fontWeight:700, marginBottom:10 }}>💸 Gastos pagados</div>
+                {txsGasto.length===0 ? (
+                  <div style={{ textAlign:'center', padding:'18px 0', fontSize:12, color:'var(--text3)' }}>
+                    Sin gastos registrados este mes.
+                  </div>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:6, maxHeight:210, overflowY:'auto', paddingRight:6 }}>
+                    {txsGasto.map(t => (
+                      <div key={t.id} style={{ display:'flex', justifyContent:'space-between', fontSize:12, color:'var(--text2)' }}>
+                        <div style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                          {t.descripcion || t.categoria || 'Gasto'}
+                        </div>
+                        <div style={{ fontWeight:700, color:'#dc2626', marginLeft:10 }}>{S0(t.monto)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Deudas actuales */}
+              <div style={{ gridColumn:'span 2', background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
+                <div style={{ fontSize:12, fontWeight:700, marginBottom:10 }}>💳 Deudas actuales</div>
+                {deudas.length===0 ? (
+                  <div style={{ textAlign:'center', padding:'18px 0', fontSize:12, color:'var(--text3)' }}>
+                    Sin deudas configuradas.
+                  </div>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:6, maxHeight:240, overflowY:'auto', paddingRight:6 }}>
+                    {deudas.sort((a,b)=>{
+                      const pa=!!pagosHechos[`d_${a.id}`];
+                      const pb=!!pagosHechos[`d_${b.id}`];
+                      return pa - pb;
+                    }).map(d=>{
+                      const pagado = !!pagosHechos[`d_${d.id}`]
+                      return (
+                        <div key={d.id}
+                          style={{
+                            display:'flex', alignItems:'center', gap:6,
+                            padding:'6px 8px', borderRadius:7,
+                            background:pagado?'#f0fdf4':'var(--bg)',
+                            border:`1px solid ${pagado?'#86efac':'var(--border)'}`,
+                            transition:'all 0.2s',
+                            cursor:pagado?'default':'pointer',
+                          }}
+                          onClick={() => !pagado && marcarPagoDeudaPuntual(d)}>
+                          <div style={{
+                            width:16, height:16, borderRadius:4, flexShrink:0,
+                            border:`1.5px solid ${pagado?'#16a34a':'#d1d5db'}`,
+                            background:pagado?'#16a34a':'white',
+                            display:'flex', alignItems:'center', justifyContent:'center',
+                            fontSize:8,
+                          }}>
+                            {pagado && <span style={{color:'white', fontWeight:900}}>✓</span>}
+                          </div>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize:9, fontWeight:600, color:'var(--text2)', textDecoration:pagado?'line-through':'none' }}>{d.nombre||'Sin nombre'}</div>
+                            <div style={{ fontSize:10, fontWeight:700, color:pagado?'#16a34a':'#dc2626' }}>{S0(Number(d.monto_pendiente || d.monto || d.monto_cuota || 0))}</div>
+                          </div>
+                          {pagado && (
+                            <button onClick={(e) => {
+                              e.stopPropagation()
+                              desmarcarPagoDeuda(pagosHechos[`d_${d.id}`].id)
+                            }}
+                              style={{ padding:'3px 5px', borderRadius:4, background:'#fca5a5', border:'none', color:'white', fontSize:10, fontWeight:700, cursor:'pointer', flexShrink:0 }}>
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+            </div>
+          </div>
+
         </div>
+
       </div>
+
 
       {/* ══ PRÓXIMOS INGRESOS + PRÓXIMA QUINCENA ════════════ */}
       <div className="g2" style={{ marginBottom:16 }}>

@@ -6,28 +6,22 @@ const MENU = [
     { id:'dashboard',        emoji:'🏠', label:'Inicio' },
   ]},
   { id:'flujo', label:'FLUJO DE DINERO', items:[
-    { id:'flujo_dashboard',  emoji:'📊', label:'Dashboard flujo' },
-    { id:'quincena_resumen', emoji:'📅', label:'Resumen quincena' },
-    { id:'ingresos',         emoji:'↑',  label:'Ingresos' },
-    { id:'gastos',           emoji:'↓',  label:'Gastos' },
     { id:'flujo_caja',       emoji:'💸', label:'Flujo de caja' },
+    { id:'movimientos',      emoji:'🔁', label:'Movimientos' },
   ]},
   { id:'obligaciones', label:'OBLIGACIONES', items:[
-    { id:'obligaciones_dashboard', emoji:'📋', label:'Dashboard' },
-    { id:'deudas',                 emoji:'💳', label:'Deudas' },
+    { id:'deudas', emoji:'💳', label:'Deudas' },
   ]},
   { id:'patrimonio', label:'PATRIMONIO', items:[
-    { id:'patrimonio_dashboard', emoji:'📊', label:'Dashboard' },
     { id:'reservas',             emoji:'🏦', label:'Reservas' },
     { id:'ahorro_programado',    emoji:'📅', label:'Ahorro programado' },
     { id:'inversiones',          emoji:'📈', label:'Inversiones' },
     { id:'propiedades',          emoji:'🏠', label:'Propiedades' },
   ]},
   { id:'planificacion', label:'PLANIFICACIÓN', items:[
-    { id:'planificacion_dashboard', emoji:'🗓️', label:'Dashboard' },
-    { id:'presupuesto',             emoji:'📋', label:'Presupuesto' },
-    { id:'metas',                   emoji:'🎯', label:'Metas' },
-    { id:'calendario',              emoji:'🗓️', label:'Calendario' },
+    { id:'presupuesto',  emoji:'📋', label:'Presupuesto' },
+    { id:'metas',        emoji:'🎯', label:'Metas' },
+    { id:'calendario',   emoji:'🗓️', label:'Calendario' },
   ]},
   { id:'analisis', label:'ANÁLISIS', items:[
     { id:'reportes',      emoji:'📉', label:'Reportes' },

@@ -9,6 +9,7 @@ import QuincenaResumen     from './pages/QuincenaResumen'
 import Ingresos            from './pages/Ingresos'
 import Gastos              from './pages/Gastos'
 import FlujoCaja           from './pages/FlujoCajaPage'
+import Movimientos         from './pages/Movimientos'
 import Deudas              from './pages/Deudas'
 import Reservas            from './pages/Reservas'
 import AhorroProgramado    from './pages/AhorroProgramado'
@@ -97,6 +98,7 @@ export default function App() {
     quincena_resumen:        <QuincenaResumen  usuarioId={usuario.id} />,
     ingresos:                <Ingresos         usuarioId={usuario.id} />,
     gastos:                  <Gastos           usuarioId={usuario.id} />,
+    movimientos:             <Movimientos      usuarioId={usuario.id} />,
     flujo_caja:              <FlujoCaja        usuarioId={usuario.id} />,
     deudas:                  <Deudas           usuarioId={usuario.id} />,
     reservas:                <Reservas         usuarioId={usuario.id} />,

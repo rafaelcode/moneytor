@@ -6,7 +6,9 @@ import {
   periodoDeObligacion, rangoPeriodo,
   TIPOS_INGRESO_REC,
 } from '../lib/flujoRecurrenteUtils'
+import { fmt as fmtDeuda, TIPOS_DEUDA_REC, proximaFechaPago, diasHastaPago } from '../lib/deudaRecurrenteUtils'
 import IngresoRecurrenteForm from '../components/IngresoRecurrenteForm'
+import DeudaRecurrenteForm from '../components/DeudaRecurrenteForm'
 
 export default function FlujoCaja({ usuarioId }) {
   const hoy   = new Date()
@@ -17,7 +19,8 @@ export default function FlujoCaja({ usuarioId }) {
   const [recurrentes,  setRecurrentes]  = useState([])
   const [cobros,       setCobros]       = useState([])
   const [deudas,       setDeudas]       = useState([])
-  const [cargando,     setCargando]     = useState(true)
+  const [deudasRec,    setDeudasRec]    = useState([])
+  const [cargando,     setCargando]    = useState(true)
 
   // Modales
   const [modalRec,     setModalRec]     = useState(false)
@@ -27,6 +30,10 @@ export default function FlujoCaja({ usuarioId }) {
   const [montoCobro,   setMontoCobro]   = useState('')
   const [notasCobro,   setNotasCobro]   = useState('')
   const [loadingCobro, setLoadingCobro] = useState(false)
+  
+  // Deudas recurrentes
+  const [modalDeudaRec, setModalDeudaRec] = useState(false)
+  const [editandoDeudaRec, setEditandoDeudaRec] = useState(null)
 
   const periodoActual = hoy.getDate()<=15 ? 'quincena_1' : 'quincena_2'
 
@@ -39,14 +46,16 @@ export default function FlujoCaja({ usuarioId }) {
     const desde = `${anio}-${m}-01`
     const hasta = `${anio}-${m}-${ult}`
 
-    const [recRes, cobrosRes, deudasRes] = await Promise.all([
+    const [recRes, cobrosRes, deudasRes, deudasRecRes] = await Promise.all([
       supabase.from('ingresos_recurrentes').select('*').eq('usuario_id',usuarioId).eq('activo',true),
       supabase.from('cobros').select('*').eq('usuario_id',usuarioId).gte('fecha_cobro',desde).lte('fecha_cobro',hasta).order('fecha_cobro',{ascending:false}),
       supabase.from('deudas').select('*').eq('usuario_id',usuarioId).eq('estado','activa'),
+      supabase.from('deudas_recurrentes').select('*').eq('usuario_id',usuarioId).eq('activo',true),
     ])
     setRecurrentes(recRes.data||[])
     setCobros(cobrosRes.data||[])
     setDeudas(deudasRes.data||[])
+    setDeudasRec(deudasRecRes.data||[])
     setCargando(false)
   }
 
@@ -101,6 +110,12 @@ export default function FlujoCaja({ usuarioId }) {
   async function eliminarRecurrente(id) {
     if (!confirm('¿Eliminar este ingreso recurrente?')) return
     await supabase.from('ingresos_recurrentes').update({activo:false}).eq('id',id)
+    cargar()
+  }
+
+  async function eliminarDeudaRec(id) {
+    if (!confirm('¿Eliminar esta obligación recurrente?')) return
+    await supabase.from('deudas_recurrentes').update({activo:false}).eq('id',id)
     cargar()
   }
 
@@ -208,57 +223,53 @@ export default function FlujoCaja({ usuarioId }) {
                     }
                   </div>
 
-                  {/* Quincenas */}
-                  {rec.frecuencia==='quincenal' ? (
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                      {[
-                        {periodo:'quincena_1',label:'1ª quincena',monto:rec.monto_pago_1,dia:rec.dia_pago_1,color:'#0891b2',cobrado:cobQ1},
-                        {periodo:'quincena_2',label:'2ª quincena',monto:rec.monto_pago_2,dia:rec.dia_pago_2,color:'#7c3aed',cobrado:cobQ2},
-                      ].map(q=>(
-                        <div key={q.periodo} style={{
-                          background:'white',borderRadius:11,padding:'10px 12px',
-                          border:`1.5px solid ${q.cobrado?q.color+'50':'var(--border)'}`,
-                        }}>
-                          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
-                            <span style={{fontSize:11,fontWeight:700,color:q.color}}>{q.label} (día {q.dia})</span>
-                            {q.cobrado && <span style={{fontSize:10,fontWeight:700,color:'#16a34a',background:'#f0fdf4',padding:'1px 6px',borderRadius:20}}>✓ Cobrado</span>}
-                          </div>
-                          <div style={{fontFamily:'Nunito',fontWeight:900,fontSize:16,color:q.cobrado?'#16a34a':q.color,marginBottom:6}}>
-                            {fmt(q.monto||0)}
-                          </div>
-                          {q.cobrado ? (
-                            <div style={{fontSize:11,color:'var(--text3)'}}>
-                              {fmtFecha(q.cobrado.fecha_cobro)}
-                              {q.cobrado.notas&&<> · {q.cobrado.notas}</>}
-                            </div>
-                          ) : (
-                            <button
-                              onClick={()=>abrirCobro(rec,q.periodo)}
-                              style={{
-                                width:'100%',padding:'6px',borderRadius:8,border:'none',
-                                background:q.color,color:'white',
-                                fontFamily:'Poppins',fontWeight:700,fontSize:11,cursor:'pointer',
-                              }}>
-                              💸 Cobrar {q.label.toLowerCase()}
-                            </button>
+                  {/* Pago actual */}
+                  {(() => {
+                    const periodo = rec.frecuencia==='mensual' ? 'mes_completo' : periodoActual
+                    const cobrado = cobroDeRec(rec.id, periodo)
+                    const montoPeriodo = rec.frecuencia==='quincenal'
+                      ? periodo==='quincena_1'
+                        ? (rec.monto_pago_1||rec.monto_total)
+                        : (rec.monto_pago_2||rec.monto_total)
+                      : rec.monto_total
+                    const labelPeriodo = rec.frecuencia==='quincenal'
+                      ? (periodo==='quincena_1' ? '1ª quincena' : '2ª quincena')
+                      : 'Mes'
+
+                    return (
+                      <div style={{display:'flex',alignItems:'center',gap:10,marginTop:10,flexWrap:'wrap'}}>
+                        <div style={{display:'flex',alignItems:'center',gap:6}}>
+                          <span style={{fontSize:11,fontWeight:700,color:'var(--text2)'}}>{labelPeriodo}</span>
+                          {cobrado && (
+                            <span style={{fontSize:10,fontWeight:700,color:'#16a34a',background:'#f0fdf4',padding:'2px 8px',borderRadius:20,border:'1.5px solid #86efac'}}>
+                              ✓ Pagado
+                            </span>
                           )}
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div>
-                      {cobMes ? (
-                        <div style={{display:'inline-flex',alignItems:'center',gap:8,background:'#f0fdf4',border:'1.5px solid #86efac',borderRadius:10,padding:'7px 12px'}}>
-                          <span style={{fontSize:13,fontWeight:700,color:'#16a34a'}}>✓ Cobrado el {fmtFecha(cobMes.fecha_cobro)}</span>
-                          <span style={{fontSize:13,fontFamily:'Nunito',fontWeight:900,color:'#16a34a'}}>{fmt(cobMes.monto)}</span>
+
+                        <div style={{flexGrow:1,minWidth:0,display:'flex',flexDirection:'column'}}>
+                          <div style={{fontFamily:'Nunito',fontWeight:900,fontSize:16,color:cobrado?'#16a34a':tipoInfo.color}}>{fmt(montoPeriodo)}</div>
+                          {cobrado ? (
+                            <div style={{fontSize:11,color:'var(--text3)'}}>
+                              Cobrado el {fmtFecha(cobrado.fecha_cobro)}{cobrado.notas?` · ${cobrado.notas}`:''}
+                            </div>
+                          ) : (
+                            <div style={{fontSize:11,color:'var(--text3)'}}>
+                              {rec.frecuencia==='quincenal'
+                                ? `Monto estimado para esta quincena` 
+                                : `Monto estimado para este mes`}
+                            </div>
+                          )}
                         </div>
-                      ) : (
-                        <button onClick={()=>abrirCobro(rec,'mes_completo')} style={btnPrimario(tipoInfo.color)}>
-                          💸 Registrar cobro
-                        </button>
-                      )}
-                    </div>
-                  )}
+
+                        {!cobrado && (
+                          <button onClick={()=>abrirCobro(rec,periodo)} style={btnPrimario(tipoInfo.color)}>
+                            💸 Cobrar {labelPeriodo.toLowerCase()}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </div>
 
                 <div style={{textAlign:'right',flexShrink:0}}>
@@ -313,74 +324,7 @@ export default function FlujoCaja({ usuarioId }) {
         })}
       </div>
 
-      {/* ── Panel de obligaciones por quincena ── */}
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:22}}>
-        {['quincena_1','quincena_2'].map(p=>{
-          const info = PERIODOS[p]
-          const est  = estadoPeriodo(p)
-          const cobradoEstePeriodo = cobros.filter(c=>c.periodo===p).reduce((s,c)=>s+Number(c.monto),0)
-          return (
-            <div key={p} style={{background:'white',borderRadius:16,border:'1.5px solid var(--border)',padding:'18px 20px',boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
-              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14}}>
-                <span style={{fontSize:20}}>{info.emoji}</span>
-                <div>
-                  <div style={{fontFamily:'Nunito',fontWeight:900,fontSize:14,color:info.color}}>{info.label}</div>
-                  <div style={{fontSize:11,color:'var(--text3)'}}>Días {info.rango} del mes</div>
-                </div>
-              </div>
-
-              {/* Balance */}
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
-                <div style={{background:'#f0fdf4',borderRadius:10,padding:10,border:'1.5px solid #86efac'}}>
-                  <div style={{fontSize:10,fontWeight:700,color:'#166534',marginBottom:2}}>COBRADO</div>
-                  <div style={{fontFamily:'Nunito',fontWeight:900,fontSize:16,color:'#16a34a'}}>{fmt(cobradoEstePeriodo)}</div>
-                </div>
-                <div style={{background:'#fef2f2',borderRadius:10,padding:10,border:'1.5px solid #fecaca'}}>
-                  <div style={{fontSize:10,fontWeight:700,color:'#991b1b',marginBottom:2}}>OBLIGACIONES</div>
-                  <div style={{fontFamily:'Nunito',fontWeight:900,fontSize:16,color:'#dc2626'}}>{fmt(est.totalObligaciones)}</div>
-                </div>
-              </div>
-
-              {/* Sobrante */}
-              <div style={{
-                background:est.sobrante>=0?'#f0fdf4':'#fef2f2',
-                border:`1.5px solid ${est.sobrante>=0?'#86efac':'#fca5a5'}`,
-                borderRadius:10,padding:'8px 12px',marginBottom:14,
-                display:'flex',alignItems:'center',justifyContent:'space-between',
-              }}>
-                <span style={{fontSize:12,fontWeight:700,color:est.sobrante>=0?'#166534':'#991b1b'}}>
-                  {est.sobrante>=0?'✅ Sobrante':'⚠️ Falta'}
-                </span>
-                <span style={{fontFamily:'Nunito',fontWeight:900,fontSize:16,color:est.sobrante>=0?'#16a34a':'#dc2626'}}>
-                  {fmt(Math.abs(est.sobrante))}
-                </span>
-              </div>
-
-              {/* Obligaciones del período */}
-              {est.obligaciones.length===0 ? (
-                <div style={{fontSize:12,color:'var(--text3)',textAlign:'center',padding:'8px 0'}}>Sin obligaciones en este período</div>
-              ) : est.obligaciones.map(d=>(
-                <div key={d.id} style={{
-                  display:'flex',alignItems:'center',justifyContent:'space-between',
-                  padding:'8px 10px',borderRadius:9,marginBottom:6,
-                  background:'var(--bg)',border:'1px solid var(--border)',
-                }}>
-                  <div>
-                    <div style={{fontSize:12,fontWeight:700}}>{d.nombre}</div>
-                    <div style={{fontSize:10,color:'var(--text3)'}}>
-                      Día {d.dia_pago_mes} · {d.tipo?.replace('_',' ')}
-                    </div>
-                  </div>
-                  <div style={{fontFamily:'Nunito',fontWeight:800,fontSize:14,color:'#dc2626'}}>
-                    {fmt(d.monto_cuota||d.monto_pendiente)}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )
-        })}
-      </div>
-
+ 
       {/* ── Historial de cobros del mes ── */}
       {cobros.length>0&&(
         <div style={{background:'white',borderRadius:16,border:'1.5px solid var(--border)',padding:'18px 20px',boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
@@ -410,9 +354,121 @@ export default function FlujoCaja({ usuarioId }) {
         </div>
       )}
 
+      {/* ── Obligaciones recurrentes configuradas ── */}
+      <div style={{background:'white',borderRadius:16,border:'1.5px solid var(--border)',padding:'18px 20px',marginBottom:22,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+          <div style={{fontFamily:'Nunito',fontWeight:900,fontSize:15}}>💳 Obligaciones recurrentes</div>
+          <button onClick={()=>setModalDeudaRec(true)} style={btnPrimario('#dc2626')}>
+            + Agregar obligación
+          </button>
+        </div>
+
+        {deudasRec.length===0 ? (
+          <div style={{textAlign:'center',padding:'24px 0'}}>
+            <div style={{fontSize:36,marginBottom:8}}>💳</div>
+            <div style={{fontSize:13,color:'var(--text3)',marginBottom:12}}>
+              Configura tus obligaciones recurrentes (tarjetas, préstamos, servicios) para mejor control.
+            </div>
+            <button onClick={()=>setModalDeudaRec(true)} style={btnPrimario('#dc2626')}>
+              💳 Crear primera obligación
+            </button>
+          </div>
+        ) : deudasRec.map(deuda=>{
+          const tipoInfo = TIPOS_DEUDA_REC.find(t=>t.valor===deuda.tipo)||{emoji:'💳',color:'#7c3aed'}
+          const proxFecha = proximaFechaPago(deuda)
+          const diasRest = diasHastaPago(proxFecha)
+          const esHoy = diasRest===0
+          const esMañana = diasRest===1
+
+          return (
+            <div key={deuda.id} style={{
+              borderRadius:14,border:'1.5px solid var(--border)',
+              padding:'14px 16px',marginBottom:12,
+              background: esHoy?'#fef2f2':'var(--bg)',
+              borderColor: esHoy?'#fecaca':'var(--border)',
+            }}>
+              <div style={{display:'flex',alignItems:'flex-start',gap:12}}>
+                <div style={{
+                  width:44,height:44,borderRadius:12,flexShrink:0,
+                  background:`${tipoInfo.color}15`,display:'flex',
+                  alignItems:'center',justifyContent:'center',fontSize:20,
+                  border:`1.5px solid ${tipoInfo.color}30`,
+                }}>{tipoInfo.emoji}</div>
+
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:4}}>
+                    <span style={{fontFamily:'Nunito',fontWeight:900,fontSize:15}}>{deuda.nombre}</span>
+                    {esHoy&&<span style={{fontSize:11,fontWeight:800,color:'#dc2626',background:'#fef2f2',padding:'2px 8px',borderRadius:20,border:'1.5px solid #fecaca'}}>⚡ HOY HAY QUE PAGAR</span>}
+                    {esMañana&&<span style={{fontSize:11,fontWeight:700,color:'#f97316',background:'#fffbeb',padding:'2px 8px',borderRadius:20}}>⏰ Mañana vence</span>}
+                  </div>
+
+                  <div style={{fontSize:12,color:'var(--text2)',marginBottom:8}}>
+                    {deuda.frecuencia==='quincenal'
+                      ? `Quincenal: día ${deuda.dia_pago_1} y ${deuda.dia_pago_2||30} · Total ${fmtDeuda(deuda.monto_total)}`
+                      : deuda.frecuencia==='mensual'
+                      ? `Mensual: día ${deuda.dia_pago_1} · ${fmtDeuda(deuda.monto_total)}`
+                      : `Bimensual · ${fmtDeuda(deuda.monto_total)}`
+                    }
+                  </div>
+
+                  {/* Quincenas */}
+                  {deuda.frecuencia==='quincenal' ? (
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                      {[
+                        {label:'1ª quincena',monto:deuda.monto_pago_1,dia:deuda.dia_pago_1,color:'#dc2626'},
+                        {label:'2ª quincena',monto:deuda.monto_pago_2,dia:deuda.dia_pago_2,color:'#f97316'},
+                      ].map((q,i)=>(
+                        <div key={i} style={{
+                          background:'white',borderRadius:11,padding:'10px 12px',
+                          border:`1.5px solid ${q.color}30`,
+                        }}>
+                          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+                            <span style={{fontSize:11,fontWeight:700,color:q.color}}>{q.label} (día {q.dia})</span>
+                          </div>
+                          <div style={{fontFamily:'Nunito',fontWeight:900,fontSize:16,color:q.color,marginBottom:6}}>
+                            {fmtDeuda(q.monto||0)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{background:'white',borderRadius:10,border:'1.5px solid var(--border)',padding:'10px 12px'}}>
+                      <div style={{fontSize:11,fontWeight:700,color:'var(--text2)',marginBottom:4}}>Día {deuda.dia_pago_1} de cada mes</div>
+                      <div style={{fontFamily:'Nunito',fontWeight:900,fontSize:16,color:tipoInfo.color}}>
+                        {fmtDeuda(deuda.monto_pago_1||deuda.monto_total)}
+                      </div>
+                    </div>
+                  )}
+
+                  {deuda.notas&&(
+                    <div style={{fontSize:11,color:'var(--text3)',marginTop:8,paddingTop:8,borderTop:'1px solid var(--border)'}}>
+                      📝 {deuda.notas}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{textAlign:'right',flexShrink:0}}>
+                  <div style={{fontFamily:'Nunito',fontWeight:900,fontSize:18,color:tipoInfo.color}}>{fmtDeuda(deuda.monto_total)}</div>
+                  <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>/{deuda.frecuencia}</div>
+                  {proxFecha&&<div style={{fontSize:11,fontWeight:600,color:diasRest<=3?'#dc2626':diasRest<=7?'#f97316':'var(--text3)',marginTop:4}}>
+                    {diasRest===0?'⚡ Hoy':diasRest===1?'⏰ Mañana':`${diasRest}d`}
+                  </div>}
+                  <div style={{display:'flex',gap:5,marginTop:8,justifyContent:'flex-end'}}>
+                    <button onClick={()=>setEditandoDeudaRec(deuda)} style={btnIcono('#7c3aed')}>✏️</button>
+                    <button onClick={()=>eliminarDeudaRec(deuda.id)} style={btnIcono('#dc2626')}>🗑️</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
       {/* Modales */}
       {modalRec&&<IngresoRecurrenteForm usuarioId={usuarioId} onClose={()=>setModalRec(false)} onGuardado={cargar}/>}
       {editandoRec&&<IngresoRecurrenteForm usuarioId={usuarioId} registro={editandoRec} onClose={()=>setEditandoRec(null)} onGuardado={cargar}/>}
+      {modalDeudaRec&&<DeudaRecurrenteForm usuarioId={usuarioId} onClose={()=>setModalDeudaRec(false)} onGuardado={cargar}/>}
+      {editandoDeudaRec&&<DeudaRecurrenteForm usuarioId={usuarioId} registro={editandoDeudaRec} onClose={()=>setEditandoDeudaRec(null)} onGuardado={cargar}/>}
     </div>
   )
 }

@@ -125,12 +125,12 @@ export default function IngresoRecurrenteForm({ usuarioId, registro, onClose, on
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
             <div>
               <label style={lbl}>📝 Nombre</label>
-              <input value={form.nombre} onChange={e=>set('nombre',e.target.value)}
+              <input value={form.nombre||''} onChange={e=>set('nombre',e.target.value)}
                 placeholder="Ej: Sueldo empresa XYZ" style={inp} autoFocus/>
             </div>
             <div>
               <label style={lbl}>🏢 Empleador (opcional)</label>
-              <input value={form.empleador} onChange={e=>set('empleador',e.target.value)}
+              <input value={form.empleador||''} onChange={e=>set('empleador',e.target.value)}
                 placeholder="Nombre empresa" style={inp}/>
             </div>
           </div>
@@ -158,7 +158,7 @@ export default function IngresoRecurrenteForm({ usuarioId, registro, onClose, on
             <label style={lbl}>💰 Monto total mensual</label>
             <div style={{position:'relative'}}>
               <span style={pfx(color)}>S/.</span>
-              <input type="number" value={form.monto_total}
+              <input type="number" value={form.monto_total||''}
                 onChange={e=>onMontoTotal(e.target.value)}
                 placeholder="0.00" min="0" step="0.01"
                 style={{...inp,paddingLeft:44,fontSize:20,fontWeight:800,color}}/>
@@ -203,7 +203,7 @@ export default function IngresoRecurrenteForm({ usuarioId, registro, onClose, on
                   </div>
                   <div style={{marginBottom:10}}>
                     <label style={{...lbl,fontSize:11}}>Día de cobro</label>
-                    <input type="number" value={form.dia_pago_2}
+                    <input type="number" value={form.dia_pago_2 ?? ''}
                       onChange={e=>set('dia_pago_2',e.target.value)}
                       min="16" max="31" placeholder="30"
                       style={{...inp,textAlign:'center',fontWeight:700}}/>
@@ -213,7 +213,7 @@ export default function IngresoRecurrenteForm({ usuarioId, registro, onClose, on
                     <label style={{...lbl,fontSize:11}}>Monto a cobrar</label>
                     <div style={{position:'relative'}}>
                       <span style={pfx('#7c3aed')}>S/.</span>
-                      <input type="number" value={form.monto_pago_2}
+                      <input type="number" value={form.monto_pago_2||''}
                         onChange={e=>set('monto_pago_2',e.target.value)}
                         placeholder="0.00" min="0" step="0.01"
                         style={{...inp,paddingLeft:40,fontWeight:700,color:'#7c3aed'}}/>
@@ -254,7 +254,7 @@ export default function IngresoRecurrenteForm({ usuarioId, registro, onClose, on
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
               <div>
                 <label style={lbl}>📅 Día de cobro del mes</label>
-                <input type="number" value={form.dia_pago_1}
+                <input type="number" value={form.dia_pago_1 ?? ''}
                   onChange={e=>set('dia_pago_1',e.target.value)}
                   min="1" max="31" placeholder="30" style={inp}/>
               </div>
@@ -274,7 +274,7 @@ export default function IngresoRecurrenteForm({ usuarioId, registro, onClose, on
           {/* Próxima fecha manual */}
           <div>
             <label style={lbl}>📅 Próxima fecha de cobro (opcional)</label>
-            <input type="date" value={form.proxima_fecha}
+            <input type="date" value={form.proxima_fecha||''}
               onChange={e=>set('proxima_fecha',e.target.value)} style={inp}/>
             <div style={{fontSize:11,color:'var(--text3)',marginTop:4}}>
               Si no la pones, se calcula automáticamente.
