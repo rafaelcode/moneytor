@@ -88,6 +88,8 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
   const [deudasRec,   setDeudasRec]   = useState([])
   const [pagosHechos, setPagosHechos] = useState({})
   const [lineasPres,  setLineasPres]  = useState([])
+  const [tarjetas,    setTarjetas]    = useState([])
+  const [cuentas,     setCuentas]     = useState([])
 
   // UI cobro
   const [cobrandoRec, setCobrandoRec] = useState(null)
@@ -112,7 +114,7 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
     const hastaPer = `${anioAct}-${m}-${esQ1?'15':String(ult).padStart(2,'0')}`
 
     try {
-      const [rR,cR,gR,dR,dRecR,pR,pmR] = await Promise.all([
+      const [rR,cR,gR,dR,dRecR,pR,pmR,tR,ctR] = await Promise.all([
         supabase.from('ingresos_recurrentes').select('*').eq('usuario_id',usuarioId).eq('activo',true),
         supabase.from('cobros').select('*').eq('usuario_id',usuarioId).gte('fecha_cobro',desdeMes).lte('fecha_cobro',hastaMes),
         supabase.from('transacciones').select('*').eq('usuario_id',usuarioId).eq('tipo','gasto').gte('fecha',desdeMes).lte('fecha',hastaMes),
@@ -120,6 +122,8 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
         supabase.from('deudas_recurrentes').select('*').eq('usuario_id',usuarioId).eq('activo',true),
         supabase.from('pagos_deuda').select('*').eq('usuario_id',usuarioId),
         supabase.from('presupuesto_mes').select('*,presupuesto_mes_lineas(*)').eq('usuario_id',usuarioId).eq('mes',mesAct).eq('anio',anioAct).single(),
+        supabase.from('tarjetas_credito').select('*').eq('usuario_id',usuarioId).eq('activa',true),
+        supabase.from('cuentas').select('*').eq('usuario_id',usuarioId).eq('activa',true),
       ])
       
       setRec(rR.data||[])
@@ -141,6 +145,8 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
       console.log('Pagos procesados (ph):', ph)
       setPagosHechos(ph)
       setLineasPres(pmR.data?.presupuesto_mes_lineas||[])
+      setTarjetas(tR.data||[])
+      setCuentas(ctR.data||[])
       setCargando(false)
     } catch (error) {
       console.error('Error cargando datos:', error)
@@ -377,26 +383,28 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
       {/* ══ HEADER ══════════════════════════════════════════ */}
       <div style={{ marginBottom:16 }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8, marginBottom:12 }}>
-          <div>
-            <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:20, letterSpacing:'-0.4px' }}>{saludoHora()} 👋</div>
-            <div style={{ fontSize:11, color:'var(--text3)', marginTop:4, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
-              <span>
-                {hoy.toLocaleDateString('es-PE',{weekday:'long',day:'numeric'})}
-              </span>
-              <span style={{
-                background:'linear-gradient(135deg,#6c63ff,#8b5cf6)',
-                color:'white',
-                padding:'4px 10px',
-                borderRadius:8,
-                fontWeight:900,
-                fontSize:12,
-                textTransform:'capitalize',
-                letterSpacing:'0.5px',
-                boxShadow:'0 2px 8px rgba(108,99,255,0.3)'
-              }}>
-                {MESES[hoy.getMonth()]}
-              </span>
-              <span>{anioAct}</span>
+          <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+            {/* Día grande */}
+            <div style={{
+              width:56, height:56, borderRadius:14,
+              background:'linear-gradient(135deg,#6c63ff,#8b5cf6)',
+              display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+              boxShadow:'0 4px 14px rgba(108,99,255,0.35)', flexShrink:0,
+            }}>
+              <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:22, color:'white', lineHeight:1 }}>
+                {hoy.getDate()}
+              </div>
+              <div style={{ fontSize:9, color:'rgba(255,255,255,0.85)', textTransform:'uppercase', fontWeight:700 }}>
+                {MESES[hoy.getMonth()].slice(0,3)}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:18, color:'var(--text)', letterSpacing:'-0.3px', textTransform:'capitalize' }}>
+                {hoy.toLocaleDateString('es-PE',{weekday:'long'})}
+              </div>
+              <div style={{ fontSize:12, color:'var(--text3)', marginTop:2, fontWeight:600 }}>
+                {MESES[hoy.getMonth()]} {anioAct}
+              </div>
             </div>
           </div>
           <button onClick={()=>onNavigate('quincena_resumen')} style={{ fontSize:11, fontWeight:700, color:'#6c63ff', background:'#f5f3ff', border:'1.5px solid #c4b5fd', borderRadius:8, padding:'6px 12px' }}>
@@ -443,6 +451,177 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
 
         {/* ────── FLUJO DE CAJA + MOVIMIENTOS (full width) ────── */}
         <div style={{ display:'grid', gap:14 }}>
+
+                    {/* ══ TARJETAS Y CUENTAS ══════════════════════════════ */}
+          {(tarjetas.length > 0 || cuentas.length > 0) && (
+            <div style={{ background:'white', borderRadius:16, border:'1.5px solid var(--border)', padding:'16px', boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+                <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, color:'#7c3aed' }}>
+                  🏦 Tarjetas y cuentas
+                </div>
+                <div style={{ display:'flex', gap:8 }}>
+                  <button onClick={()=>onNavigate('tarjetas')} style={{ fontSize:10, fontWeight:700, color:'#dc2626', background:'none', border:'none', cursor:'pointer' }}>Tarjetas →</button>
+                  <button onClick={()=>onNavigate('cuentas')} style={{ fontSize:10, fontWeight:700, color:'#2563eb', background:'none', border:'none', cursor:'pointer' }}>Cuentas →</button>
+                </div>
+              </div>
+
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))', gap:10 }}>
+
+                {/* Tarjetas de crédito */}
+                {tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).map(t => {
+                  const pct = t.limite_credito > 0 ? Math.min((t.deuda_actual/t.limite_credito)*100,100) : 0
+                  const colorBarra = pct>=90?'#ef4444':pct>=70?'#f97316':'#22c55e'
+                  const color = t.color || '#dc2626'
+                  const diasCorte = t.fecha_corte ? Math.ceil((new Date(t.fecha_corte+'T00:00:00')-new Date())/(1000*60*60*24)) : null
+                  const diasPago  = t.fecha_limite_pago ? Math.ceil((new Date(t.fecha_limite_pago+'T00:00:00')-new Date())/(1000*60*60*24)) : null
+                  return (
+                    <div key={t.id} style={{ borderRadius:12, border:'1.5px solid var(--border)', overflow:'hidden' }}>
+                      <div style={{ height:4, background:color }} />
+                      <div style={{ padding:'10px 12px' }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
+                          <div>
+                            <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:13 }}>{t.nombre_banco}</div>
+                            <div style={{ fontSize:10, color:'var(--text3)', fontFamily:'monospace' }}>···· {t.numero}</div>
+                          </div>
+                          <span style={{ fontSize:9, fontWeight:700, padding:'2px 7px', borderRadius:20, background:'#fef2f2', color:'#dc2626' }}>💳 Crédito</span>
+                        </div>
+                        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, marginBottom:8 }}>
+                          <div style={{ background:'var(--bg)', borderRadius:7, padding:'6px 8px' }}>
+                            <div style={{ fontSize:9, color:'var(--text3)', fontWeight:600 }}>Saldo</div>
+                            <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:13, color:'#16a34a' }}>{S0(t.saldo_actual)}</div>
+                          </div>
+                          <div style={{ background:'#fef2f2', borderRadius:7, padding:'6px 8px' }}>
+                            <div style={{ fontSize:9, color:'#f87171', fontWeight:600 }}>Deuda</div>
+                            <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:13, color:'#ef4444' }}>{S0(t.deuda_actual)}</div>
+                          </div>
+                        </div>
+                        {t.limite_credito > 0 && (
+                          <div style={{ marginBottom:8 }}>
+                            <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, marginBottom:3 }}>
+                              <span style={{ color:'var(--text3)' }}>Uso {pct.toFixed(0)}%</span>
+                              <span style={{ color:'var(--text3)' }}>Límite {S0(t.limite_credito)}</span>
+                            </div>
+                            <div style={{ height:5, background:'var(--bg)', borderRadius:999, overflow:'hidden' }}>
+                              <div style={{ height:'100%', width:`${pct}%`, background:colorBarra, borderRadius:999, transition:'width 0.5s' }} />
+                            </div>
+                          </div>
+                        )}
+                        {(diasCorte !== null || diasPago !== null) && (
+                          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:4, marginBottom:8 }}>
+                            {diasCorte !== null && (
+                              <div style={{ background:'var(--bg)', borderRadius:6, padding:'4px 6px', textAlign:'center' }}>
+                                <div style={{ fontSize:8, color:'var(--text3)' }}>Corte</div>
+                                <div style={{ fontSize:10, fontWeight:700, color: diasCorte<=3?'#ef4444':diasCorte<=7?'#f97316':'var(--text2)' }}>
+                                  {diasCorte<=0?'HOY':diasCorte===1?'Mañana':`${diasCorte}d`}
+                                </div>
+                              </div>
+                            )}
+                            {diasPago !== null && (
+                              <div style={{ background: diasPago<=3?'#fef2f2':'var(--bg)', borderRadius:6, padding:'4px 6px', textAlign:'center' }}>
+                                <div style={{ fontSize:8, color:'var(--text3)' }}>Pago límite</div>
+                                <div style={{ fontSize:10, fontWeight:700, color: diasPago<=3?'#ef4444':diasPago<=7?'#f97316':'var(--text2)' }}>
+                                  {diasPago<=0?'VENCIDO':diasPago===1?'Mañana':`${diasPago}d`}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <div style={{ display:'flex', gap:6 }}>
+                          <button onClick={()=>onNavigate('tarjetas')} style={{
+                            flex:1, padding:'5px 0', fontSize:10, fontWeight:700,
+                            background:'#fef2f2', color:'#dc2626',
+                            border:'1px solid #fecaca', borderRadius:7, cursor:'pointer',
+                          }}>💳 Pagar</button>
+                          <button onClick={()=>onNavigate('tarjetas')} style={{
+                            flex:1, padding:'5px 0', fontSize:10, fontWeight:700,
+                            background:'var(--bg)', color:'var(--text2)',
+                            border:'1.5px solid var(--border)', borderRadius:7, cursor:'pointer',
+                          }}>Ver detalle</button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+
+                {/* Tarjetas de débito */}
+                {tarjetas.filter(t=>t.tipo==='debito').map(t => {
+                  const color = t.color || '#2563eb'
+                  return (
+                    <div key={t.id} style={{ borderRadius:12, border:'1.5px solid var(--border)', overflow:'hidden' }}>
+                      <div style={{ height:4, background:color }} />
+                      <div style={{ padding:'10px 12px' }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
+                          <div>
+                            <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:13 }}>{t.nombre_banco}</div>
+                            <div style={{ fontSize:10, color:'var(--text3)', fontFamily:'monospace' }}>···· {t.numero}</div>
+                          </div>
+                          <span style={{ fontSize:9, fontWeight:700, padding:'2px 7px', borderRadius:20, background:'#eff6ff', color:'#2563eb' }}>🏦 Débito</span>
+                        </div>
+                        <div style={{ background:'var(--bg)', borderRadius:8, padding:'8px 10px', marginBottom:8, textAlign:'center' }}>
+                          <div style={{ fontSize:9, color:'var(--text3)', fontWeight:600 }}>Saldo disponible</div>
+                          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:18, color }}>
+                            {S0(t.saldo_actual)}
+                          </div>
+                        </div>
+                        <button onClick={()=>onNavigate('tarjetas')} style={{
+                          width:'100%', padding:'5px 0', fontSize:10, fontWeight:700,
+                          background:'var(--bg)', color:'var(--text2)',
+                          border:'1.5px solid var(--border)', borderRadius:7, cursor:'pointer',
+                        }}>↑↓ Mover dinero</button>
+                      </div>
+                    </div>
+                  )
+                })}
+
+                {/* Cuentas bancarias */}
+                {cuentas.map(c => {
+                  const EMOJI_TIPO = { sueldo:'💼', ahorro_digital:'🏦', billetera_digital:'📱', corriente:'🔄', credito_entidad:'🏛️' }
+                  const COLOR_TIPO = { sueldo:'#16a34a', ahorro_digital:'#2563eb', billetera_digital:'#7c3aed', corriente:'#0891b2', credito_entidad:'#dc2626' }
+                  const color = c.color || COLOR_TIPO[c.tipo] || '#2563eb'
+                  const emoji = EMOJI_TIPO[c.tipo] || '🏦'
+                  const esCredito = c.tipo === 'credito_entidad'
+                  return (
+                    <div key={c.id} style={{ borderRadius:12, border:'1.5px solid var(--border)', overflow:'hidden' }}>
+                      <div style={{ height:4, background:color }} />
+                      <div style={{ padding:'10px 12px' }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
+                          <div>
+                            <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:13 }}>{emoji} {c.nombre}</div>
+                            {c.banco && <div style={{ fontSize:10, color:'var(--text3)' }}>{c.banco}</div>}
+                            {c.plataforma && <div style={{ fontSize:10, color:'var(--text3)' }}>{c.plataforma}</div>}
+                          </div>
+                          <span style={{ fontSize:9, fontWeight:700, padding:'2px 7px', borderRadius:20, background:`${color}15`, color }}>{c.moneda}</span>
+                        </div>
+                        <div style={{ display:'grid', gridTemplateColumns: esCredito ? '1fr 1fr' : '1fr', gap:6, marginBottom:8 }}>
+                          <div style={{ background:'var(--bg)', borderRadius:7, padding:'6px 8px' }}>
+                            <div style={{ fontSize:9, color:'var(--text3)', fontWeight:600 }}>{esCredito?'Disponible':'Saldo'}</div>
+                            <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:14, color }}>{S0(c.saldo_actual)}</div>
+                          </div>
+                          {esCredito && (
+                            <div style={{ background:'#fef2f2', borderRadius:7, padding:'6px 8px' }}>
+                              <div style={{ fontSize:9, color:'#f87171', fontWeight:600 }}>Deuda</div>
+                              <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:14, color:'#ef4444' }}>{S0(c.deuda_actual)}</div>
+                            </div>
+                          )}
+                        </div>
+                        {c.tipo==='sueldo' && c.entidad_pagadora && (
+                          <div style={{ fontSize:10, color:'#16a34a', fontWeight:600, marginBottom:6 }}>
+                            💼 {c.entidad_pagadora}{c.dia_pago?` · Día ${c.dia_pago}`:''}
+                          </div>
+                        )}
+                        <button onClick={()=>onNavigate('cuentas')} style={{
+                          width:'100%', padding:'5px 0', fontSize:10, fontWeight:700,
+                          background:'var(--bg)', color:'var(--text2)',
+                          border:'1.5px solid var(--border)', borderRadius:7, cursor:'pointer',
+                        }}>↑↓ Mover dinero</button>
+                      </div>
+                    </div>
+                  )
+                })}
+
+              </div>
+            </div>
+          )}
 
           {/* Flujo de caja */}
           <div style={{ background:'white', borderRadius:16, border:'1.5px solid var(--border)', padding:'16px', boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
@@ -614,56 +793,18 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
             </div>
           </div>
 
-          {/* Movimientos */}
+          {/* Deudas puntuales */ }
           <div style={{ background:'white', borderRadius:16, border:'1.5px solid var(--border)', padding:'16px', boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
-            <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, marginBottom:12, color:'#6c63ff' }}>
-              📌 Movimientos
+
+                         <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, marginBottom:12, color:'#6c63ff' }}>
+              📌 DEUDAS
             </div>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:12 }}>
-
-              {/* Ingresos del mes */}
-              <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
-                <div style={{ fontSize:12, fontWeight:700, marginBottom:10 }}>💰 Ingresos del mes</div>
-                {cobros.length===0 ? (
-                  <div style={{ textAlign:'center', padding:'18px 0', fontSize:12, color:'var(--text3)' }}>
-                    Sin cobros registrados.
-                  </div>
-                ) : (
-                  <div style={{ display:'flex', flexDirection:'column', gap:6, maxHeight:210, overflowY:'auto', paddingRight:6 }}>
-                    {cobros.map(c => (
-                      <div key={c.id} style={{ display:'flex', justifyContent:'space-between', fontSize:12, color:'var(--text2)' }}>
-                        <div style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.nombre || c.descripcion || 'Ingreso'}</div>
-                        <div style={{ fontWeight:700, color:'#16a34a', marginLeft:10 }}>{S0(c.monto)}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Gastos pagados */}
-              <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
-                <div style={{ fontSize:12, fontWeight:700, marginBottom:10 }}>💸 Gastos pagados</div>
-                {txsGasto.length===0 ? (
-                  <div style={{ textAlign:'center', padding:'18px 0', fontSize:12, color:'var(--text3)' }}>
-                    Sin gastos registrados este mes.
-                  </div>
-                ) : (
-                  <div style={{ display:'flex', flexDirection:'column', gap:6, maxHeight:210, overflowY:'auto', paddingRight:6 }}>
-                    {txsGasto.map(t => (
-                      <div key={t.id} style={{ display:'flex', justifyContent:'space-between', fontSize:12, color:'var(--text2)' }}>
-                        <div style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                          {t.descripcion || t.categoria || 'Gasto'}
-                        </div>
-                        <div style={{ fontWeight:700, color:'#dc2626', marginLeft:10 }}>{S0(t.monto)}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Deudas actuales */}
-              <div style={{ gridColumn:'span 2', background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
-                <div style={{ fontSize:12, fontWeight:700, marginBottom:10 }}>💳 Deudas actuales</div>
+        {/* ── Deudas actuales (PRIMERO) ── */}
+              <div style={{ gridColumn:'span 3', background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+                  <div style={{ fontSize:12, fontWeight:700 }}>💳 Deudas actuales</div>
+                  <button onClick={()=>onNavigate('deudas')} style={{ fontSize:10, fontWeight:700, color:'#ef4444', background:'none', border:'none', cursor:'pointer' }}>Ver todas →</button>
+                </div>
                 {deudas.length===0 ? (
                   <div style={{ textAlign:'center', padding:'18px 0', fontSize:12, color:'var(--text3)' }}>
                     Sin deudas configuradas.
@@ -715,9 +856,100 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
                   </div>
                 )}
               </div>
+          </div>
+          {/* Movimientos */}
+          <div style={{ background:'white', borderRadius:16, border:'1.5px solid var(--border)', padding:'16px', boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
+
+            <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, marginBottom:12, color:'#6c63ff' }}>
+              📌 Movimientos
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:12 }}>
+
+             
+
+              {/* ── Ingresos del mes ── */}
+              <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)',display:'flex',flexDirection:'column' }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+                  <div style={{ fontSize:12, fontWeight:700 }}>💰 Ingresos del mes</div>
+                  <button onClick={()=>onRegistrar('ingreso')} style={{
+                    fontSize:11, fontWeight:700, color:'white',
+                    background:'#16a34a', border:'none', borderRadius:7,
+                    padding:'4px 10px', cursor:'pointer',
+                  }}>+ Registrar</button>
+                </div>
+                {cobros.length===0 ? (
+                  <div style={{ textAlign:'center', padding:'18px 0', fontSize:12, color:'var(--text3)' }}>
+                    Sin cobros registrados.
+                  </div>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:6, maxHeight:210, overflowY:'auto', paddingRight:6 }}>
+                    {cobros.map(c => (
+                      <div key={c.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:12, color:'var(--text2)', gap:8 }}>
+                        <div style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.nombre || c.descripcion || 'Ingreso'}</div>
+                        <div style={{ fontWeight:700, color:'#16a34a', flexShrink:0 }}>{S0(c.monto)}</div>
+                      </div>
+                    ))}
+                    <div style={{ display:'flex', justifyContent:'space-between', padding:'6px 8px', background:'#f0fdf4', borderRadius:8, border:'1px solid #86efac', marginTop:4 }}>
+                      <span style={{ fontSize:11, fontWeight:700, color:'#166534' }}>Total</span>
+                      <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:13, color:'#16a34a' }}>{S0(cobros.reduce((s,c)=>s+Number(c.monto),0))}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Gastos pagados ── */}
+              <div style={{background:'var(--bg)',borderRadius:12,padding:12,border:'1px solid var(--border)',display:'flex',flexDirection:'column'}}>
+
+  {/* header */}
+  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:10 }}>
+    <div style={{ fontSize:12, fontWeight:700 }}>💸 Gastos pagados</div>
+  </div>
+
+  {/* lista con scroll */}
+  <div style={{
+    display:'flex',
+    flexDirection:'column',
+    gap:6,
+    maxHeight:170,
+    overflowY:'auto',
+    paddingRight:6
+  }}>
+    {txsGasto.map(t => (
+      <div key={t.id} style={{
+        display:'flex',
+        justifyContent:'space-between',
+        fontSize:12
+      }}>
+        <div>{t.descripcion || 'Gasto'}</div>
+        <div style={{ fontWeight:700, color:'#dc2626' }}>{S0(t.monto)}</div>
+      </div>
+    ))}
+  </div>
+
+  {/* total fijo */}
+  <div style={{
+    display:'flex',
+    justifyContent:'space-between',
+    padding:'6px 8px',
+    background:'#fef2f2',
+    borderRadius:8,
+    border:'1px solid #fca5a5',
+    marginTop:8
+  }}>
+    <span style={{ fontSize:11, fontWeight:700 }}>Total</span>
+    <span style={{ fontWeight:900 }}>
+      {S0(txsGasto.reduce((s,t)=>s+Number(t.monto),0))}
+    </span>
+  </div>
+
+</div>
 
             </div>
           </div>
+
+
+
+
 
         </div>
 
