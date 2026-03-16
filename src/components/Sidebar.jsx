@@ -5,7 +5,7 @@ const MENU = [
     id: 'inicio', label: 'INICIO',
     color: '#ef4444',
     items: [
-      { id: 'dashboard', emoji: '🏠', label: 'Inicio' },
+      { id: 'dashboard', emoji: '🏠', label: 'Resumen' },
     ],
   },
   {

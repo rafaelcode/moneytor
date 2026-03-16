@@ -1,5 +1,5 @@
 const PAGE_INFO = {
-  dashboard:               { titulo:'Inicio',               color:'var(--primary-blue)', btn:'+ Registrar' },
+  dashboard:               { titulo:'Resumen',              color:'var(--primary-blue)', btn:'+ Registrar' },
   flujo_dashboard:         { titulo:'Flujo de dinero',       color:'var(--info-blue)', btn:'+ Registrar' },
   quincena_resumen:        { titulo:'Resumen quincena',      color:'var(--info-blue)', btn:null },
   ingresos:                { titulo:'Ingresos',              color:'var(--success-green)', btn:'+ Ingreso', flecha:'↑' },
@@ -50,7 +50,7 @@ export default function Topbar({ currentPage, onRegistrar, onCerrarSesion, email
           }}>
           <div style={{ width:16, height:2, background:'var(--text2)', borderRadius:1 }}/>
           <div style={{ width:16, height:2, background:'var(--text2)', borderRadius:1 }}/>
-          <div style={{ width:10, height:2, background:'var(--text2)', borderRadius:1, alignSelf:'flex-start', marginLeft:3 }}/>
+          <div style={{ width:16, height:2, background:'var(--text2)', borderRadius:1 }}/>
         </button>
 
         {/* Barra color + título */}

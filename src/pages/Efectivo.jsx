@@ -41,15 +41,26 @@ function EfectivoCard({ cuenta, onEdit, onMovimiento, onDelete, onToggleDetalle,
         </div>
 
         {/* Saldo */}
-        <div style={{ background: BG, borderRadius: 12, padding: '14px 16px', marginBottom: 14, border: `1.5px solid ${BORDE}` }}>
-          <div style={{ fontSize: 11, color: '#15803d', fontWeight: 700, marginBottom: 4 }}>
-            💰 Saldo disponible
+        <div style={{
+          background: cuenta.es_dinero_inmediato ? BG : '#faf5ff',
+          borderRadius: 12, padding: '14px 16px', marginBottom: 14,
+          border: `1.5px solid ${cuenta.es_dinero_inmediato ? BORDE : '#e9d5ff'}`
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 4,
+            color: cuenta.es_dinero_inmediato ? '#15803d' : '#7c3aed'
+          }}>
+            {cuenta.es_dinero_inmediato ? '💰 Saldo disponible' : '🔒 No disponible'}
           </div>
-          <div style={{ fontFamily: 'Nunito', fontWeight: 900, fontSize: 28, color: COLOR, letterSpacing: '-1px' }}>
+          <div style={{
+            fontFamily: 'Nunito', fontWeight: 900, fontSize: 28, letterSpacing: '-1px',
+            color: cuenta.es_dinero_inmediato ? COLOR : '#7c3aed'
+          }}>
             {fmt(cuenta.saldo_actual, cuenta.moneda || 'PEN')}
           </div>
-          <div style={{ fontSize: 10, color: '#15803d', marginTop: 4 }}>
-            {cuenta.moneda || 'PEN'} · dinero inmediato
+          <div style={{ fontSize: 10, marginTop: 4,
+            color: cuenta.es_dinero_inmediato ? '#15803d' : '#7c3aed'
+          }}>
+            {cuenta.moneda || 'PEN'} · {cuenta.es_dinero_inmediato ? 'dinero inmediato' : cuenta.clasificacion_saldo || 'no inmediato'}
           </div>
         </div>
 
@@ -187,7 +198,7 @@ export default function Efectivo({ usuarioId }) {
     cargar()
   }
 
-  const totalEfectivo = cuentas.reduce((s, c) => s + Number(c.saldo_actual || 0), 0)
+  const totalEfectivo = cuentas.filter(c => c.es_dinero_inmediato !== false).reduce((s, c) => s + Number(c.saldo_actual || 0), 0)
 
   // Últimos movimientos de todas las billeteras combinados (para la vista consolidada)
   const todosMovimientos = Object.values(historial).flat().sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).slice(0, 10)
@@ -211,7 +222,8 @@ export default function Efectivo({ usuarioId }) {
             {fmt(totalEfectivo)}
           </div>
           <div style={{ fontSize: 12, color: '#15803d', marginTop: 4 }}>
-            {cuentas.length} billetera{cuentas.length !== 1 ? 's' : ''} · dinero inmediato disponible
+            {cuentas.length} billetera{cuentas.length !== 1 ? 's' : ''}
+            {cuentas.some(c => c.es_dinero_inmediato === false) && ` · ${cuentas.filter(c => c.es_dinero_inmediato === false).length} no disponible`}
           </div>
         </div>
         <button onClick={() => setModalNueva(true)} style={{

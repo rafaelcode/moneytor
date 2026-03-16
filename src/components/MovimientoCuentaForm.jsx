@@ -37,7 +37,7 @@ export default function MovimientoCuentaForm({ usuarioId, cuenta, todasLasCuenta
   const [error,          setError]          = useState('')
 
   const accionSel    = ACCIONES.find(a => a.v === accion)
-  const montoN       = Number(monto || 0)
+  const montoN = parseFloat(parseFloat(monto || 0).toFixed(2))
   const esTransf     = accion === 'transferencia'
   const nuevoEstado  = monto !== '' && !isNaN(monto) ? calcNuevoSaldo(cuenta, accion, monto) : null
 
@@ -206,8 +206,7 @@ export default function MovimientoCuentaForm({ usuarioId, cuenta, todasLasCuenta
               type="number" inputMode="decimal"
               value={monto}
               onChange={e => setMonto(e.target.value)}
-              placeholder="0.00"
-              min="0" step="0.01"
+              placeholder="0.00"              
               style={{
                 ...inputStyle,
                 paddingLeft: 50, fontSize: 20, fontWeight: 800,

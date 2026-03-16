@@ -166,10 +166,10 @@ export function accionesDeTipo(tipo) {
 
 // ── Calcular nuevo saldo después de un movimiento ─────────
 export function calcNuevoSaldo(cuenta, accion, monto) {
-  const saldo  = Number(cuenta.saldo_actual || 0)
+  const saldo  = parseFloat(Number(cuenta.saldo_actual || 0).toFixed(2))
   const deuda  = Number(cuenta.deuda_actual || 0)
   const limite = Number(cuenta.limite_credito || 0)
-  const n      = Number(monto || 0)
+  const n      = parseFloat(Number(monto || 0).toFixed(2))
 
   if (accion === 'ajuste') return { saldo_actual: n }
 

@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { TIPOS_DEUDA_REC, proximaFechaPago, diasHastaPago } from '../lib/deudaRecurrenteUtils'
 
-const S0 = n => `S/. ${Number(n||0).toLocaleString('es-PE',{maximumFractionDigits:0})}`
+const S0 = n => `S/. ${Number(n||0).toLocaleString('es-PE',{minimumFractionDigits:2,maximumFractionDigits:2})}`
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
                'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
 
@@ -79,11 +79,13 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
   const [tarjetas,    setTarjetas]    = useState([])
   const [cuentas,     setCuentas]     = useState([])
   const [cobrandoRec, setCobrandoRec] = useState(null)
+  const [cobrandoPeriodo, setCobrandoPeriodo] = useState(null)
   const [montoCobro,  setMontoCobro]  = useState('')
   const [loadingCob,  setLoadingCob]  = useState(false)
   const [marcandoPago, setMarcandoPago] = useState(null)
   const [montoPago,    setMontoPago]    = useState('')
   const [loadingPago,  setLoadingPago]  = useState(false)
+  const [verPagadas,   setVerPagadas]   = useState(false)
 
   useEffect(() => { cargar() }, [periodo])
 
@@ -100,7 +102,7 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
         supabase.from('transacciones').select('*').eq('usuario_id',usuarioId).eq('tipo','gasto').gte('fecha',desdeMes).lte('fecha',hastaMes),
         supabase.from('deudas').select('*').eq('usuario_id',usuarioId).eq('estado','activa'),
         supabase.from('deudas_recurrentes').select('*').eq('usuario_id',usuarioId).eq('activo',true),
-        supabase.from('pagos_deuda').select('*').eq('usuario_id',usuarioId),
+        supabase.from('pagos_deuda').select('*').eq('usuario_id',usuarioId).gte('fecha',desdeMes).lte('fecha',hastaMes),
         supabase.from('presupuesto_mes').select('*,presupuesto_mes_lineas(*)').eq('usuario_id',usuarioId).eq('mes',mesAct).eq('anio',anioAct).single(),
         supabase.from('tarjetas_credito').select('*').eq('usuario_id',usuarioId).eq('activa',true),
         supabase.from('cuentas').select('*').eq('usuario_id',usuarioId).eq('activa',true),
@@ -111,9 +113,25 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
       setDeudas(dR.data||[])
       setDeudasRec(dRecR.data||[])
       const deudRecIds = new Set((dRecR.data||[]).map(d=>d.id))
+      // ph tracks: dr_<id>_q1, dr_<id>_q2 for quincenal; dr_<id> for mensual; d_<id> for deudas
       const ph={}; (pR.data||[]).forEach(p=>{
-        if (p.deuda_recurrente_id) ph[`dr_${p.deuda_recurrente_id}`]=p
-        else if (p.deuda_id && deudRecIds.has(p.deuda_id)) ph[`dr_${p.deuda_id}`]=p
+        const fechaDia = p.fecha ? new Date(p.fecha+'T00:00:00').getDate() : 0
+        const esQ1Pago = fechaDia <= 15
+        if (p.deuda_recurrente_id) {
+          const dr = (dRecR.data||[]).find(d=>d.id===p.deuda_recurrente_id)
+          if (dr?.frecuencia==='quincenal') {
+            ph[`dr_${p.deuda_recurrente_id}_${esQ1Pago?'q1':'q2'}`] = p
+          } else {
+            ph[`dr_${p.deuda_recurrente_id}`] = p
+          }
+        } else if (p.deuda_id && deudRecIds.has(p.deuda_id)) {
+          const dr = (dRecR.data||[]).find(d=>d.id===p.deuda_id)
+          if (dr?.frecuencia==='quincenal') {
+            ph[`dr_${p.deuda_id}_${esQ1Pago?'q1':'q2'}`] = p
+          } else {
+            ph[`dr_${p.deuda_id}`] = p
+          }
+        }
         if (p.deuda_id) ph[`d_${p.deuda_id}`]=p
       })
       setPagosHechos(ph)
@@ -181,6 +199,39 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
     if (error) { console.error(error); return }
     cargar()
   }
+
+  async function marcarPagoDeudaRecQuincena(deudaRec, monto, quincena) {
+    const montoNum = Number(monto || 0)
+    // Usar fecha en la quincena correcta del mes actual
+    const diaFecha = quincena === 'q1' ? Math.min(deudaRec.dia_pago_1||15, 15) : Math.max(deudaRec.dia_pago_2||hoy.getDate(), 16)
+    const m = String(mesAct).padStart(2,'0')
+    const ultDia = new Date(anioAct, mesAct, 0).getDate()
+    const dia = String(Math.min(diaFecha, quincena==='q1'?15:ultDia)).padStart(2,'0')
+    const fecha = `${anioAct}-${m}-${dia}`
+    const {error:txError} = await supabase.from('transacciones').insert({
+      usuario_id:usuarioId, tipo:'gasto', monto:montoNum, fecha,
+      categoria:'otro_gasto', descripcion:`Pago ${deudaRec.nombre} ${quincena==='q1'?'1ª quincena':'2ª quincena'}`,
+    })
+    if (txError) { console.error(txError); return }
+    const { error } = await supabase.from('pagos_deuda').insert({
+      usuario_id:usuarioId, deuda_recurrente_id:deudaRec.id, monto:montoNum, fecha,
+    })
+    if (error) { console.error(error); return }
+    cargar()
+  }
+
+  async function anularPagoDeudaRec(pagoObj) {
+    if (!pagoObj?.id) return
+    // Eliminar transacción de gasto asociada (buscar por monto, fecha y descripción)
+    const { data: txs } = await supabase.from('transacciones')
+      .select('*').eq('usuario_id', usuarioId).eq('tipo', 'gasto')
+      .eq('monto', pagoObj.monto).eq('fecha', pagoObj.fecha).ilike('descripcion', '%Pago%')
+    if (txs?.length > 0) await supabase.from('transacciones').delete().eq('id', txs[0].id)
+    // Eliminar el pago recurrente
+    await supabase.from('pagos_deuda').delete().eq('id', pagoObj.id)
+    cargar()
+  }
+
 
   async function marcarCobroIngreso(rec, quincena) {
     const pKey = quincena==='q1'?'quincena_1':'quincena_2'
@@ -304,12 +355,17 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
     if (pagosHechos[`d_${d.id}`]) return s
     return s + Number(d.monto_pendiente||d.monto_cuota||0)
   },0)
-  const obligacionesRecPendientes = deudRecPer.reduce((s,dr)=>{
-    if (pagosHechos[`dr_${dr.id}`]) return s
-    const m = (dr.frecuencia==='quincenal'&&esQ1)?dr.monto_pago_1||dr.monto_total
-            : (dr.frecuencia==='quincenal'&&!esQ1)?dr.monto_pago_2||dr.monto_total
-            : dr.monto_total
-    return s+Number(m||0)
+  // Para quincenales: verificar cada quincena del mes por separado
+  const obligacionesRecPendientes = deudasRec.reduce((s,dr)=>{
+    if (dr.frecuencia==='quincenal') {
+      const q1Pag = !!pagosHechos[`dr_${dr.id}_q1`]
+      const q2Pag = !!pagosHechos[`dr_${dr.id}_q2`]
+      if (!q1Pag) s += Number(dr.monto_pago_1||dr.monto_total||0)
+      if (!q2Pag) s += Number(dr.monto_pago_2||dr.monto_total||0)
+    } else if (dr.frecuencia==='mensual') {
+      if (!pagosHechos[`dr_${dr.id}`]) s += Number(dr.monto_total||0)
+    }
+    return s
   },0)
   const totalObligacionesPeriodo = deudasPendientes + obligacionesRecPendientes
   const libre     = saldoReal - totalObligacionesPeriodo
@@ -369,345 +425,374 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
   return (
     <div className="page">
 
-      {/* ══ HEADER ══ */}
-      <div style={{ marginBottom:16 }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8, marginBottom:12 }}>
-          <div>
-            <div style={{ fontSize:11, fontWeight:700, color:'var(--text3)', letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:2 }}>{anioAct}</div>
-            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:2 }}>
-              <button disabled style={{ width:26, height:26, borderRadius:8, border:'1.5px solid #c4b5fd', background:'#f5f3ff', color:'#8b5cf6', fontSize:14, fontWeight:900, cursor:'not-allowed', opacity:0.45, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Poppins', flexShrink:0 }}>‹</button>
-              <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:32, letterSpacing:'-1px', background:'linear-gradient(135deg,#6c63ff,#8b5cf6)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', textTransform:'capitalize', lineHeight:1 }}>
-                {MESES[hoy.getMonth()]}
-              </span>
-              <button disabled style={{ width:26, height:26, borderRadius:8, border:'1.5px solid #c4b5fd', background:'#f5f3ff', color:'#8b5cf6', fontSize:14, fontWeight:900, cursor:'not-allowed', opacity:0.45, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Poppins', flexShrink:0 }}>›</button>
-            </div>
-            <div style={{ fontSize:13, color:'var(--text3)', fontWeight:600, textTransform:'capitalize' }}>
-              {hoy.toLocaleDateString('es-PE',{weekday:'long', day:'numeric'})}
-            </div>
-          </div>
-          <button onClick={()=>onNavigate('quincena_resumen')} style={{ fontSize:11, fontWeight:700, color:'#6c63ff', background:'#f5f3ff', border:'1.5px solid #c4b5fd', borderRadius:8, padding:'6px 12px' }}>
-            📊 Ver detalle
-          </button>
-        </div>
-      </div>
+      {/* ══ SECCIÓN 1: SALDO ACTUAL ══ */}
+      {(() => {
+        const porCobrar  = recConEstado.filter(r=>!r.yaCobro).reduce((s,r)=>s+r.esperado, 0)
+        const saldoMes   = kpiDisponible + porCobrar
+        const saldoLibre = saldoMes - kpiGastos - totalObligacionesPeriodo
+        const colorLibre = saldoLibre >= 0 ? '#16a34a' : '#dc2626'
+        return (
+          <>
+            <Seccion titulo="💵 Saldo actual" colorBorde="#86efac">
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
 
-      {/* ══ KPIs ══ */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12, marginBottom:18 }}>
-
-        {/* 1. Saldo disponible */}
-        <div style={{ background:'linear-gradient(135deg,#f0fdf4,#dcfce7)', border:'1.5px solid #86efac', borderRadius:14, padding:'14px' }}>
-          <div style={{ fontSize:10, fontWeight:700, color:'#166534', textTransform:'uppercase', marginBottom:6, letterSpacing:'0.5px' }}>💵 Saldo disponible</div>
-          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:20, color:'#16a34a', marginBottom:6, letterSpacing:'-0.5px' }}>{S0(kpiDisponible)}</div>
-          <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
-            {cuentasSueldo.length>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#15803d' }}><span>💼 Sueldo</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(cuentasSueldo.reduce((s,c)=>s+Number(c.saldo_actual||0),0))}</span></div>}
-            {cuentasAhorro.length>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#15803d' }}><span>🏦 Ahorro</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(cuentasAhorro.reduce((s,c)=>s+Number(c.saldo_actual||0),0))}</span></div>}
-            {cuentasBilletera.length>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#15803d' }}><span>📱 Billeteras</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(cuentasBilletera.reduce((s,c)=>s+Number(c.saldo_actual||0),0))}</span></div>}
-            {cuentasCorriente.length>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#15803d' }}><span>🔄 Corriente</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(cuentasCorriente.reduce((s,c)=>s+Number(c.saldo_actual||0),0))}</span></div>}
-            {cuentasEfectivo.length>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#15803d' }}><span>💵 Efectivo</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(cuentasEfectivo.reduce((s,c)=>s+Number(c.saldo_actual||0),0))}</span></div>}
-            {saldoTarjetasDebito>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#15803d' }}><span>💳 Débito</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(saldoTarjetasDebito)}</span></div>}
-            {!tienenCuentas && <div style={{ fontSize:9, color:'#15803d', opacity:0.7 }}>Cobrado - gastos del período</div>}
-          </div>
-        </div>
-
-        {/* 2. Deudas */}
-        <div style={{ background:'linear-gradient(135deg,#fef2f2,#fee2e2)', border:'1.5px solid #fca5a5', borderRadius:14, padding:'14px' }}>
-          <div style={{ fontSize:10, fontWeight:700, color:'#991b1b', textTransform:'uppercase', marginBottom:6, letterSpacing:'0.5px' }}>⚠️ Deudas</div>
-          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:20, color:'#dc2626', marginBottom:6, letterSpacing:'-0.5px' }}>{S0(kpiDeudas)}</div>
-          <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
-            {deudas.length>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#991b1b' }}><span>📋 Préstamos / cuotas</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(deudas.reduce((s,d)=>s+Number(d.monto_pendiente||0),0))}</span></div>}
-            {tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).length>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#991b1b' }}><span>💳 Tarjetas crédito</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).reduce((s,t)=>s+Number(t.deuda_actual||0),0))}</span></div>}
-            {kpiDeudas===0 && <div style={{ fontSize:9, color:'#16a34a', fontWeight:700 }}>✅ Sin deudas pendientes</div>}
-          </div>
-        </div>
-
-        {/* 3. Ingresos cobrados */}
-        <div onClick={()=>onNavigate('cuentas')} style={{ background:'linear-gradient(135deg,#eff6ff,#dbeafe)', border:'1.5px solid #93c5fd', borderRadius:14, padding:'14px', cursor:'pointer', transition:'box-shadow 0.15s' }}
-          onMouseEnter={e=>e.currentTarget.style.boxShadow='0 4px 16px rgba(37,99,235,0.18)'}
-          onMouseLeave={e=>e.currentTarget.style.boxShadow='none'}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
-            <div style={{ fontSize:10, fontWeight:700, color:'#1e40af', textTransform:'uppercase', letterSpacing:'0.5px' }}>💰 Ingresos cobrados</div>
-            <span style={{ fontSize:9, color:'#3b82f6', fontWeight:700 }}>Ver →</span>
-          </div>
-          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:20, color:'#2563eb', marginBottom:6, letterSpacing:'-0.5px' }}>{S0(kpiIngresos)}</div>
-          <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
-            {recConEstado.map(r => (
-              <div key={r.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:9, color:'#1e40af' }}>
-                <span style={{ display:'flex', alignItems:'center', gap:3, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:85 }}>
-                  <span>{r.yaCobro?'✅':'⏳'}</span><span>{r.nombre}</span>
-                </span>
-                <span style={{ fontFamily:'Nunito', fontWeight:800, flexShrink:0, color:r.yaCobro?'#2563eb':'#94a3b8' }}>
-                  {r.yaCobro?S0(r.cobrado):S0(r.esperado)}
-                </span>
-              </div>
-            ))}
-            {rec.length===0 && <div style={{ fontSize:9, color:'#1e40af', opacity:0.7 }}>Sin ingresos registrados</div>}
-          </div>
-        </div>
-
-        {/* 4. Gastos */}
-        <div style={{ background:'linear-gradient(135deg,#fff7ed,#ffedd5)', border:'1.5px solid #fdba74', borderRadius:14, padding:'14px' }}>
-          <div style={{ fontSize:10, fontWeight:700, color:'#9a3412', textTransform:'uppercase', marginBottom:6, letterSpacing:'0.5px' }}>💸 Gastos</div>
-          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:20, color:'#ea580c', marginBottom:6, letterSpacing:'-0.5px' }}>{S0(kpiGastos)}</div>
-          <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
-            <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#9a3412' }}><span>📊 Del presupuesto</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{totalPres>0?`${Math.round((kpiGastos/totalPres)*100)}%`:'—'}</span></div>
-            <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#9a3412' }}><span>📝 Transacciones</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{txsGasto.length}</span></div>
-            {kpiIngresos>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#9a3412' }}><span>📉 % del ingreso</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{Math.round((kpiGastos/kpiIngresos)*100)}%</span></div>}
-          </div>
-        </div>
-
-      </div>
-
-      <div style={{ display:'grid', gap:14, marginBottom:16 }}>
-        <div style={{ display:'grid', gap:14 }}>
-
-          {/* ══ FLUJO DE CAJA ══ */}
-          <div style={{ background:'white', borderRadius:16, border:'1.5px solid var(--border)', padding:'16px', boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
-            <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, marginBottom:12, color:'#16a34a' }}>💧 Flujo de caja</div>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:12 }}>
-
-              {/* Ingresos por cobrar */}
-              <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-                  <div style={{ fontSize:12, fontWeight:700 }}>💰 Ingresos por cobrar</div>
-                  {cuentas.find(c=>c.tipo==='sueldo') && (
-                    <div style={{ fontSize:9, color:'#0891b2', fontWeight:600, background:'#ecfeff', padding:'2px 7px', borderRadius:20, border:'1px solid #a5f3fc' }}>
-                      💼 {cuentas.find(c=>c.tipo==='sueldo').nombre}
-                    </div>
-                  )}
-                </div>
-                {rec.length===0 ? (
-                  <div style={{ textAlign:'center', padding:'14px 0', fontSize:12, color:'var(--text3)' }}>Sin ingresos configurados.</div>
-                ) : (() => {
-                  const pendientes = rec.flatMap(r => {
-                    const cQ1  = cobros.find(c=>c.ingreso_recurrente_id===r.id && c.periodo==='quincena_1')
-                    const cQ2  = cobros.find(c=>c.ingreso_recurrente_id===r.id && c.periodo==='quincena_2')
-                    const cMes = cobros.find(c=>c.ingreso_recurrente_id===r.id && c.periodo==='mes_completo')
-                    if (r.frecuencia==='mensual') {
-                      if (cMes) return []
-                      return [{ key:r.id+'_mes', r, quincena:'mes', label:'Pago mensual', dia:r.dia_pago_1||r.dia_pago_2||30, monto:Number(r.monto_total||0) }]
-                    }
-                    const items=[]
-                    if (!cQ1) items.push({ key:r.id+'_q1', r, quincena:'q1', label:'1ª quincena · 1–15', dia:r.dia_pago_1||15, monto:Number(r.monto_pago_1||r.monto_total||0) })
-                    if (!cQ2) items.push({ key:r.id+'_q2', r, quincena:'q2', label:'2ª quincena · 16–31', dia:r.dia_pago_2||30, monto:Number(r.monto_pago_2||r.monto_total||0) })
-                    return items
-                  })
-                  if (pendientes.length===0) return (
-                    <div style={{ textAlign:'center', padding:'14px 0', fontSize:12, color:'#16a34a', fontWeight:600 }}>✅ Todos los ingresos depositados este mes</div>
-                  )
-                  return (
-                    <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                      {pendientes.map(({ key, r, quincena, label, dia, monto }) => {
-                        const fechaDia = `${anioAct}-${String(mesAct).padStart(2,'0')}-${String(Math.min(dia,new Date(anioAct,mesAct,0).getDate())).padStart(2,'0')}`
-                        const dRest   = diasHasta(fechaDia)
-                        const urgente = dRest>=0 && dRest<=3
-                        const cuentaSueldo = cuentas.find(c=>c.tipo==='sueldo')
-                        return (
-                          <div key={key} style={{ background:urgente?'#fff7ed':'white', borderRadius:10, border:`1.5px solid ${urgente?'#fdba74':'var(--border)'}`, padding:'10px 12px' }}>
-                            <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:8, marginBottom:8 }}>
-                              <div style={{ flex:1, minWidth:0 }}>
-                                <div style={{ fontWeight:700, fontSize:12, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.nombre}</div>
-                                <div style={{ fontSize:10, color:'var(--text3)', marginTop:2 }}>
-                                  {label} · día {dia}
-                                  {dRest>=0 && <span style={{ marginLeft:6, color:urgente?'#ea580c':'#0891b2', fontWeight:700 }}>{dRest===0?'⚡ hoy':dRest===1?'mañana':`en ${dRest}d`}</span>}
-                                </div>
-                              </div>
-                              <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, color:'var(--text)', flexShrink:0 }}>{S0(monto)}</div>
-                            </div>
-                            <button onClick={()=>marcarDepositado(r, quincena)} style={{ width:'100%', padding:'6px 0', borderRadius:8, border:'none', background:urgente?'#ea580c':'#0891b2', color:'white', fontFamily:'Poppins', fontWeight:700, fontSize:11, cursor:'pointer', boxShadow:`0 2px 6px ${urgente?'#ea580c':'#0891b2'}30` }}>
-                              💰 Marcar depositado{cuentaSueldo?` → ${cuentaSueldo.nombre}`:''}
-                            </button>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )
-                })()}
-              </div>
-
-              {/* Pagos mensuales pendientes */}
-              <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-                  <div style={{ fontSize:12, fontWeight:700 }}>📅 Pagos mensuales</div>
-                  <button onClick={()=>onNavigate('flujo_caja')} style={{ fontSize:10, fontWeight:700, color:'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>Ver todos →</button>
-                </div>
-                {deudRecPer.filter(dr=>!pagosHechos[`dr_${dr.id}`]).length===0 ? (
-                  <div style={{ textAlign:'center', padding:'14px 0', fontSize:12, color:'#16a34a', fontWeight:600 }}>✅ Todos pagados este período</div>
-                ) : (
-                  <div style={{ display:'flex', flexDirection:'column', gap:7 }}>
-                    {deudRecPer.filter(dr=>!pagosHechos[`dr_${dr.id}`]).map(dr=>{
-                      const monto = (dr.frecuencia==='quincenal'&&esQ1)?Number(dr.monto_pago_1||dr.monto_total||0)
-                                  : (dr.frecuencia==='quincenal'&&!esQ1)?Number(dr.monto_pago_2||dr.monto_total||0)
-                                  : Number(dr.monto_total||0)
-                      const tipoInfo = TIPOS_DEUDA_REC.find(t=>t.valor===dr.tipo)||{emoji:'💳',color:'#7c3aed'}
+                <KpiCard titulo="💵 Saldo disponible" monto={S0(kpiDisponible)}
+                  colorBg="linear-gradient(135deg,#f0fdf4,#dcfce7)" colorBorde="#86efac"
+                  colorTitulo="#166534" colorMonto="#16a34a"
+                  onNavigate={()=>onNavigate('cuentas')}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:4, marginTop:10 }}>
+                    {cuentas.filter(c => c.tipo !== 'credito_entidad' && c.es_dinero_inmediato !== false).map(c => {
+                      const destino = c.tipo === 'efectivo' ? 'efectivo' : 'cuentas'
+                      const emoji = c.tipo==='sueldo'?'💼':c.tipo==='ahorro_digital'?'🏦':c.tipo==='billetera_digital'?'📱':c.tipo==='corriente'?'🔄':c.tipo==='efectivo'?'💵':'🏦'
                       return (
-                        <div key={dr.id} style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', borderRadius:8, background:'white', border:'1.5px solid var(--border)', cursor:'pointer' }}
-                          onClick={()=>marcarPagoDeudaRec(dr, monto)}>
-                          <div style={{ width:18, height:18, borderRadius:5, flexShrink:0, border:'1.5px solid #d1d5db', background:'white', display:'flex', alignItems:'center', justifyContent:'center', fontSize:9 }}>
-                            <span style={{color:'#d1d5db'}}>○</span>
-                          </div>
-                          <span style={{ fontSize:14, flexShrink:0 }}>{tipoInfo.emoji}</span>
-                          <div style={{ flex:1, minWidth:0 }}>
-                            <div style={{ fontSize:11, fontWeight:600, color:'var(--text2)' }}>{dr.nombre||'Sin nombre'}</div>
-                            {dr.dia_pago_mes && <div style={{ fontSize:10, color:'var(--text3)' }}>Día {dr.dia_pago_mes} del mes</div>}
-                          </div>
-                          <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:13, color:tipoInfo.color, flexShrink:0 }}>{S0(monto)}</div>
+                        <div key={c.id} style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#15803d' }}>
+                          <span onClick={e=>{ e.stopPropagation(); onNavigate(destino) }}
+                            style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:110, cursor:'pointer', textDecoration:'underline', textDecorationStyle:'dotted', textUnderlineOffset:'2px' }}>
+                            {emoji} {c.nombre}
+                          </span>
+                          <span style={{ fontFamily:'Nunito', fontWeight:800, flexShrink:0 }}>{S0(c.saldo_actual||0)}</span>
                         </div>
                       )
                     })}
+                    {!tienenCuentas && <div style={{ fontSize:9, color:'#15803d', opacity:0.7 }}>Cobrado - gastos del período</div>}
                   </div>
-                )}
-              </div>
+                </KpiCard>
 
-            </div>
-          </div>
-
-          {/* ══ OBLIGACIONES ══ */}
-          <div style={{ background:'white', borderRadius:16, border:'1.5px solid var(--border)', padding:'16px', boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
-              <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, color:'#ef4444' }}>⚠️ Obligaciones</div>
-              <div style={{ display:'flex', gap:8 }}>
-                <button onClick={()=>onNavigate('deudas')}   style={{ fontSize:10, fontWeight:700, color:'#ef4444', background:'none', border:'none', cursor:'pointer' }}>Deudas →</button>
-                <button onClick={()=>onNavigate('tarjetas')} style={{ fontSize:10, fontWeight:700, color:'#dc2626', background:'none', border:'none', cursor:'pointer' }}>Tarjetas →</button>
-              </div>
-            </div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-
-              {/* Deudas actuales */}
-              <div>
-                <div style={{ fontSize:11, fontWeight:700, color:'#ef4444', marginBottom:8, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                  <span>📋 Deudas actuales</span>
-                  <span style={{ fontSize:10, fontWeight:600, color:'var(--text3)' }}>{S0(deudas.filter(d=>d.direccion!=='me_deben').reduce((s,d)=>s+Number(d.monto_pendiente||0),0))}</span>
-                </div>
-                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                  {deudas.filter(d=>d.direccion!=='me_deben').length===0 ? (
-                    <div style={{ fontSize:11, color:'var(--text3)', textAlign:'center', padding:'12px 0' }}>Sin deudas activas 🎉</div>
-                  ) : deudas.filter(d=>d.direccion!=='me_deben').map(d => {
-                    const pagado = !!pagosHechos[`d_${d.id}`]
-                    const pct = d.total_cuotas>0 ? Math.round((d.cuotas_pagadas/d.total_cuotas)*100) : null
-                    return (
-                      <div key={d.id} style={{ padding:'8px 10px', borderRadius:9, background:pagado?'#f0fdf4':'white', border:`1.5px solid ${pagado?'#86efac':'var(--border)'}` }}>
-                        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6, marginBottom:pct!==null?5:0 }}>
-                          <div style={{ fontSize:11, fontWeight:600, color:'var(--text2)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', flex:1 }}>
-                            {pagado && <span style={{marginRight:4}}>✅</span>}{d.nombre}
-                          </div>
-                          <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:12, color:pagado?'#16a34a':'#ef4444', flexShrink:0 }}>{S0(d.monto_pendiente||d.monto_cuota||0)}</div>
-                        </div>
-                        {pct!==null && <div style={{ height:4, background:'var(--bg)', borderRadius:99, overflow:'hidden' }}><div style={{ height:'100%', width:`${pct}%`, background:pct>=100?'#16a34a':'#ef4444', borderRadius:99 }}/></div>}
-                        {d.es_en_cuotas && d.total_cuotas>0 && <div style={{ fontSize:9, color:'var(--text3)', marginTop:3 }}>{d.cuotas_pagadas}/{d.total_cuotas} cuotas · {pct}%</div>}
+                <KpiCard titulo="⚠️ Deudas" monto={S0(kpiDeudas)}
+                  colorBg="linear-gradient(135deg,#fef2f2,#fee2e2)" colorBorde="#fca5a5"
+                  colorTitulo="#991b1b" colorMonto="#dc2626"
+                  onNavigate={()=>onNavigate('deudas')}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:4, marginTop:10 }}>
+                    {deudas.filter(d=>!pagosHechos[`d_${d.id}`]).map(d => (
+                      <div key={d.id} style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#991b1b' }}>
+                        <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:100 }}>📋 {d.nombre}</span>
+                        <span style={{ fontFamily:'Nunito', fontWeight:800, flexShrink:0 }}>{S0(d.monto_pendiente||d.monto_cuota||0)}</span>
                       </div>
-                    )
-                  })}
-                  <button onClick={()=>onNavigate('deudas')} style={{ marginTop:4, width:'100%', padding:'5px 0', fontSize:10, fontWeight:700, color:'#ef4444', background:'#fef2f2', border:'1px solid #fecaca', borderRadius:8, cursor:'pointer' }}>Ver todas →</button>
-                </div>
+                    ))}
+                    {tarjetas.filter(t=>(t.tipo==='credito'||!t.tipo)&&Number(t.deuda_actual||0)>0).map(t => (
+                      <div key={t.id} style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#991b1b' }}>
+                        <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:100 }}>💳 {t.nombre_banco}{t.numero?` ···${t.numero}`:''}</span>
+                        <span style={{ fontFamily:'Nunito', fontWeight:800, flexShrink:0 }}>{S0(t.deuda_actual)}</span>
+                      </div>
+                    ))}
+                    {kpiDeudas===0 && <div style={{ fontSize:9, color:'#16a34a', fontWeight:700, marginTop:4 }}>✅ Sin deudas pendientes</div>}
+                  </div>
+                </KpiCard>
+
+              </div>
+            </Seccion>
+
+            {/* ══ SECCIÓN 2: FLUJO MENSUAL ══ */}
+            <Seccion
+              titulo="📅 Flujo mensual"
+              subtitulo={`${MESES[hoy.getMonth()]} ${anioAct} · ${hoy.toLocaleDateString('es-PE',{weekday:'long', day:'numeric'})}`}
+              colorBorde="#c4b5fd"
+            >
+              {/* Botón ver detalle */}
+              <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
+                <button onClick={()=>onNavigate('quincena_resumen')} style={{ fontSize:11, fontWeight:700, color:'#6c63ff', background:'#f5f3ff', border:'1.5px solid #c4b5fd', borderRadius:8, padding:'5px 12px' }}>
+                  📊 Ver detalle
+                </button>
               </div>
 
-              {/* Tarjetas de crédito — CAMBIO: botón "Pagar →" por tarjeta */}
-              <div>
-                <div style={{ fontSize:11, fontWeight:700, color:'#dc2626', marginBottom:8, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                  <span>💳 Tarjetas crédito</span>
-                  <span style={{ fontSize:10, fontWeight:600, color:'var(--text3)' }}>{S0(tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).reduce((s,t)=>s+Number(t.deuda_actual||0),0))}</span>
-                </div>
-                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                  {tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).length===0 ? (
-                    <div style={{ fontSize:11, color:'var(--text3)', textAlign:'center', padding:'12px 0' }}>Sin tarjetas de crédito</div>
-                  ) : tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).map(t => {
-                    const pct = t.limite_credito>0 ? Math.min(Math.round((t.deuda_actual/t.limite_credito)*100),100) : 0
-                    const colorBarra = pct>=90?'#ef4444':pct>=70?'#f97316':'#22c55e'
-                    const color = t.color||'#dc2626'
-                    const diasCorte = t.fecha_corte ? diasHasta(t.fecha_corte) : null
-                    return (
-                      <div key={t.id} style={{ padding:'8px 10px', borderRadius:9, background:'white', border:`1.5px solid ${color}25` }}>
-                        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6, marginBottom:5 }}>
-                          <div style={{ display:'flex', alignItems:'center', gap:5, flex:1, minWidth:0 }}>
-                            <div style={{ width:6, height:6, borderRadius:'50%', background:color, flexShrink:0 }}/>
-                            <div style={{ fontSize:11, fontWeight:600, color:'var(--text2)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.nombre_banco} ···{t.numero}</div>
+              {/* Tarjetas Saldo mes + Saldo libre */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
+
+                <KpiCard titulo="💰 Saldo del mes" monto={S0(saldoMes)}
+                  colorBg="linear-gradient(135deg,#eff6ff,#dbeafe)" colorBorde="#93c5fd"
+                  colorTitulo="#1e40af" colorMonto="#2563eb"
+                  onNavigate={()=>onNavigate('cuentas')}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:4, marginTop:10 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#1e40af' }}><span>💵 Disponible hoy</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(kpiDisponible)}</span></div>
+                    {porCobrar>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#64748b' }}><span>⏳ Por cobrar</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>+{S0(porCobrar)}</span></div>}
+                    {recConEstado.length>0 && (
+                      <div style={{ borderTop:'1px dashed #93c5fd', paddingTop:4, marginTop:2, display:'flex', flexDirection:'column', gap:2 }}>
+                        {recConEstado.map(r => (
+                          <div key={r.id} style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:r.yaCobro?'#1e40af':'#94a3b8' }}>
+                            <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:110 }}>{r.yaCobro?'✅':'⏳'} {r.nombre}</span>
+                            <span style={{ fontFamily:'Nunito', fontWeight:800, flexShrink:0 }}>{S0(r.yaCobro?r.cobrado:r.esperado)}</span>
                           </div>
-                          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                            <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:12, color:'#dc2626', flexShrink:0 }}>{S0(t.deuda_actual||0)}</div>
-                            {Number(t.deuda_actual||0)>0 && (
-                              <button onClick={()=>onNavigate('tarjetas')} style={{ fontSize:9, fontWeight:700, padding:'2px 8px', borderRadius:20, border:'1.5px solid #dc2626', background:'#fef2f2', color:'#dc2626', cursor:'pointer', whiteSpace:'nowrap' }}>
-                                Pagar →
-                              </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </KpiCard>
+
+                <KpiCard titulo="🏁 Saldo libre estimado" monto={S0(saldoLibre)}
+                  colorBg={saldoLibre>=0?'linear-gradient(135deg,#f0fdf4,#dcfce7)':'linear-gradient(135deg,#fff1f2,#ffe4e6)'}
+                  colorBorde={saldoLibre>=0?'#86efac':'#fca5a5'}
+                  colorTitulo={saldoLibre>=0?'#166534':'#991b1b'} colorMonto={colorLibre}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:4, marginTop:10 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'var(--text3)' }}><span>💰 Saldo del mes</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(saldoMes)}</span></div>
+                    <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'var(--text3)' }}><span>💸 Gastos</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>-{S0(kpiGastos)}</span></div>
+                    <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'var(--text3)' }}><span>💳 Obligaciones</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>-{S0(totalObligacionesPeriodo)}</span></div>
+                    {totalPres>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'var(--text3)' }}><span>📊 Del presupuesto</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{Math.round((kpiGastos/totalPres)*100)}%</span></div>}
+                  </div>
+                </KpiCard>
+              </div>
+
+              {/* Ingresos fijos + Pagos del mes */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
+
+                {/* Ingresos fijos */}
+                {(() => {
+                  const cobroItems = rec.flatMap(r => {
+                    const cQ1  = cobros.find(c=>c.ingreso_recurrente_id===r.id && c.periodo==='quincena_1')
+                    const cQ2  = cobros.find(c=>c.ingreso_recurrente_id===r.id && c.periodo==='quincena_2')
+                    const cMes = cobros.find(c=>c.ingreso_recurrente_id===r.id && c.periodo==='mes_completo')
+                    if (r.frecuencia==='mensual') return [{ id:r.id+'_mes', r, cobrado:!!cMes, cobroObj:cMes||null, monto:Number(r.monto_total||0), label:r.nombre, periodo:'mes_completo', dia:r.dia_pago_1||30 }]
+                    return [
+                      { id:r.id+'_q1', r, cobrado:!!cQ1, cobroObj:cQ1||null, monto:Number(r.monto_pago_1||r.monto_total||0), label:`${r.nombre} · 1ª`, periodo:'quincena_1', dia:r.dia_pago_1||15 },
+                      { id:r.id+'_q2', r, cobrado:!!cQ2, cobroObj:cQ2||null, monto:Number(r.monto_pago_2||r.monto_total||0), label:`${r.nombre} · 2ª`, periodo:'quincena_2', dia:r.dia_pago_2||30 },
+                    ]
+                  })
+                  const pendCobros = cobroItems.filter(i=>!i.cobrado)
+                  const pagCobros  = cobroItems.filter(i=>i.cobrado)
+                  return (
+                    <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+                        <div style={{ fontSize:12, fontWeight:700 }}>💰 Ingresos fijos</div>
+                        <button onClick={()=>onNavigate('flujo_caja')} style={{ fontSize:9, fontWeight:700, color:'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>Ver →</button>
+                      </div>
+                      {cobroItems.length===0
+                        ? <div style={{ textAlign:'center', padding:'14px 0', fontSize:12, color:'var(--text3)' }}>Sin ingresos configurados</div>
+                        : <>
+                            {pendCobros.length===0
+                              ? <div style={{ textAlign:'center', padding:'10px 0', fontSize:12, color:'#16a34a', fontWeight:600 }}>✅ Todos cobrados</div>
+                              : <div style={{ display:'flex', flexDirection:'column', gap:5, marginBottom:pagCobros.length?8:0 }}>
+                                  {pendCobros.map(item => {
+                                    const dRest = diasHasta(`${anioAct}-${String(mesAct).padStart(2,'0')}-${String(Math.min(item.dia,new Date(anioAct,mesAct,0).getDate())).padStart(2,'0')}`)
+                                    const urgente = dRest>=0 && dRest<=3
+                                    return (
+                                      <div key={item.id} style={{ borderRadius:8, border:`1.5px solid ${urgente?'#fdba74':'var(--border)'}`, background:urgente?'#fff7ed':'white' }}>
+                                        <div style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 10px' }}>
+                                          <div style={{ width:16, height:16, borderRadius:4, flexShrink:0, border:'1.5px solid #86efac', background:'white', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                                            <span style={{ fontSize:8, color:'#86efac' }}>○</span>
+                                          </div>
+                                          <div style={{ flex:1, minWidth:0 }}>
+                                            <div style={{ fontSize:11, fontWeight:600, color:'var(--text2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{item.label}</div>
+                                            <div style={{ fontSize:9, color:'var(--text3)' }}>día {item.dia}{dRest>=0?` · ${dRest===0?'⚡hoy':dRest===1?'mañana':`en ${dRest}d`}`:''}</div>
+                                          </div>
+                                          <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:12, color:'#16a34a', flexShrink:0, marginRight:4 }}>{S0(item.monto)}</div>
+                                          <button onClick={()=>{ setCobrandoRec(item.r); setMontoCobro(String(item.monto)); setCobrandoPeriodo(item.periodo) }}
+                                            style={{ fontSize:9, fontWeight:700, padding:'3px 8px', borderRadius:6, border:'none', background:'#16a34a', color:'white', cursor:'pointer', whiteSpace:'nowrap' }}>
+                                            Cobrar
+                                          </button>
+                                        </div>
+                                        {cobrandoRec?.id===item.r.id && cobrandoPeriodo===item.periodo && (
+                                          <div style={{ padding:'8px 10px', borderTop:'1px solid #86efac', background:'#f0fdf4', borderRadius:'0 0 7px 7px' }}>
+                                            <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:6, alignItems:'center' }}>
+                                              <div style={{ position:'relative' }}>
+                                                <span style={{ position:'absolute', left:7, top:'50%', transform:'translateY(-50%)', fontSize:11, fontWeight:700, color:'#16a34a' }}>S/.</span>
+                                                <input type="number" value={montoCobro} onChange={e=>setMontoCobro(e.target.value)} autoFocus min="0" step="0.01"
+                                                  style={{ width:'100%', padding:'6px 8px 6px 28px', border:'1.5px solid #86efac', borderRadius:7, fontSize:12, fontWeight:700, color:'#16a34a', fontFamily:'Poppins', outline:'none', boxSizing:'border-box', background:'white' }}/>
+                                              </div>
+                                              <div style={{ display:'flex', gap:5 }}>
+                                                <button onClick={()=>confirmarCobro(item.r)} disabled={loadingCob} style={{ padding:'6px 10px', background:'#16a34a', color:'white', border:'none', borderRadius:7, fontSize:11, fontWeight:700, cursor:'pointer' }}>{loadingCob?'...':'✅'}</button>
+                                                <button onClick={()=>{ setCobrandoRec(null); setCobrandoPeriodo(null) }} style={{ padding:'6px 8px', background:'white', border:'1.5px solid var(--border)', borderRadius:7, fontSize:11, cursor:'pointer' }}>✕</button>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                            }
+                            {pagCobros.length>0 && (
+                              <TogglePagados count={pagCobros.length}>
+                                {pagCobros.map(item => (
+                                  <div key={item.id} style={{ display:'flex', alignItems:'center', gap:7, padding:'6px 10px', borderRadius:8, background:'#f0fdf4', border:'1px solid #86efac' }}>
+                                    <span style={{ fontSize:10 }}>✅</span>
+                                    <div style={{ flex:1, fontSize:11, fontWeight:600, color:'#166534', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{item.label}</div>
+                                    <div style={{ fontFamily:'Nunito', fontWeight:700, fontSize:11, color:'#16a34a', flexShrink:0 }}>{S0(item.monto)}</div>
+                                    <button onClick={async()=>{ await supabase.from('cobros').delete().eq('id',item.cobroObj.id); if(item.cobroObj.transaccion_id) await supabase.from('transacciones').delete().eq('id',item.cobroObj.transaccion_id); cargar() }}
+                                      style={{ fontSize:9, fontWeight:700, padding:'2px 6px', borderRadius:5, border:'1px solid #fca5a5', background:'#fef2f2', color:'#dc2626', cursor:'pointer', flexShrink:0 }}>Anular</button>
+                                  </div>
+                                ))}
+                              </TogglePagados>
                             )}
-                          </div>
-                        </div>
-                        {t.limite_credito>0 && (
-                          <>
-                            <div style={{ height:4, background:'var(--bg)', borderRadius:99, overflow:'hidden', marginBottom:3 }}>
-                              <div style={{ height:'100%', width:`${pct}%`, background:colorBarra, borderRadius:99, transition:'width 0.5s' }}/>
-                            </div>
-                            <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'var(--text3)' }}>
-                              <span>{pct}% usado · límite {S0(t.limite_credito)}</span>
-                              {diasCorte!==null && <span style={{ color:diasCorte<=5?'#f97316':'var(--text3)', fontWeight:diasCorte<=5?700:400 }}>{diasCorte===0?'Corte hoy':diasCorte<0?'Cortó hace '+Math.abs(diasCorte)+'d':'Corte en '+diasCorte+'d'}</span>}
-                            </div>
                           </>
+                      }
+                    </div>
+                  )
+                })()}
+
+                {/* Pagos del mes */}
+                <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+                    <div style={{ fontSize:12, fontWeight:700 }}>📅 Pagos del mes</div>
+                    <button onClick={()=>onNavigate('flujo_caja')} style={{ fontSize:9, fontWeight:700, color:'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>Ver →</button>
+                  </div>
+                  {(() => {
+                    const items = []
+                    deudasRec.forEach(dr => {
+                      const tipoInfo = TIPOS_DEUDA_REC.find(t=>t.valor===dr.tipo)||{emoji:'💳',color:'#7c3aed'}
+                      if (dr.frecuencia==='quincenal') {
+                        const pQ1 = pagosHechos[`dr_${dr.id}_q1`], pQ2 = pagosHechos[`dr_${dr.id}_q2`]
+                        items.push({ id:`${dr.id}_q1`, tipoInfo, pagado:!!pQ1, pagoObj:pQ1||null, monto:Number(dr.monto_pago_1||dr.monto_total||0), label:`${dr.nombre} · 1ª`, onPagar:()=>marcarPagoDeudaRecQuincena(dr,Number(dr.monto_pago_1||dr.monto_total||0),'q1') })
+                        items.push({ id:`${dr.id}_q2`, tipoInfo, pagado:!!pQ2, pagoObj:pQ2||null, monto:Number(dr.monto_pago_2||dr.monto_total||0), label:`${dr.nombre} · 2ª`, onPagar:()=>marcarPagoDeudaRecQuincena(dr,Number(dr.monto_pago_2||dr.monto_total||0),'q2') })
+                      } else {
+                        const p = pagosHechos[`dr_${dr.id}`]
+                        items.push({ id:`${dr.id}`, tipoInfo, pagado:!!p, pagoObj:p||null, monto:Number(dr.monto_total||0), label:dr.nombre, onPagar:()=>marcarPagoDeudaRec(dr,Number(dr.monto_total||0)) })
+                      }
+                    })
+                    const pendientes = items.filter(i=>!i.pagado)
+                    const pagados    = items.filter(i=>i.pagado)
+                    if (items.length===0) return <div style={{ textAlign:'center', padding:'14px 0', fontSize:12, color:'var(--text3)' }}>Sin pagos configurados</div>
+                    return (
+                      <>
+                        {pendientes.length===0
+                          ? <div style={{ textAlign:'center', padding:'10px 0', fontSize:12, color:'#16a34a', fontWeight:600 }}>✅ Todo pagado</div>
+                          : <div style={{ display:'flex', flexDirection:'column', gap:5, marginBottom:pagados.length?8:0 }}>
+                              {pendientes.map(({ id, tipoInfo, monto, label, onPagar }) => (
+                                <div key={id} onClick={onPagar} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 10px', borderRadius:8, background:'white', border:'1.5px solid var(--border)', cursor:'pointer' }}>
+                                  <div style={{ width:16, height:16, borderRadius:4, flexShrink:0, border:'1.5px solid #fca5a5', background:'white', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                                    <span style={{ fontSize:8, color:'#fca5a5' }}>○</span>
+                                  </div>
+                                  <span style={{ fontSize:12, flexShrink:0 }}>{tipoInfo.emoji}</span>
+                                  <div style={{ flex:1, fontSize:11, fontWeight:600, color:'var(--text2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{label}</div>
+                                  <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:12, color:tipoInfo.color, flexShrink:0 }}>{S0(monto)}</div>
+                                </div>
+                              ))}
+                            </div>
+                        }
+                        {pagados.length>0 && (
+                          <TogglePagados count={pagados.length}>
+                            {pagados.map(({ id, tipoInfo, monto, label, pagoObj }) => (
+                              <div key={id} style={{ display:'flex', alignItems:'center', gap:7, padding:'6px 10px', borderRadius:8, background:'#f0fdf4', border:'1px solid #86efac' }}>
+                                <span style={{ fontSize:10 }}>✅</span>
+                                <span style={{ fontSize:12, flexShrink:0 }}>{tipoInfo.emoji}</span>
+                                <div style={{ flex:1, fontSize:11, fontWeight:600, color:'#166534', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{label}</div>
+                                <div style={{ fontFamily:'Nunito', fontWeight:700, fontSize:11, color:'#16a34a', flexShrink:0 }}>{S0(monto)}</div>
+                                <button onClick={()=>anularPagoDeudaRec(pagoObj)} style={{ fontSize:9, fontWeight:700, padding:'2px 6px', borderRadius:5, border:'1px solid #fca5a5', background:'#fef2f2', color:'#dc2626', cursor:'pointer', flexShrink:0 }}>Anular</button>
+                              </div>
+                            ))}
+                          </TogglePagados>
                         )}
-                      </div>
+                      </>
                     )
-                  })}
-                  <button onClick={()=>onNavigate('tarjetas')} style={{ marginTop:4, width:'100%', padding:'5px 0', fontSize:10, fontWeight:700, color:'#dc2626', background:'#fef2f2', border:'1px solid #fecaca', borderRadius:8, cursor:'pointer' }}>Ver todas →</button>
+                  })()}
                 </div>
               </div>
 
-            </div>
-          </div>
-
-          {/* ══ MOVIMIENTOS ══ */}
-          <div style={{ background:'white', borderRadius:16, border:'1.5px solid var(--border)', padding:'16px', boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
-            <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, marginBottom:12, color:'#6c63ff' }}>📌 Movimientos del mes</div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-
-              <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-                  <div style={{ fontSize:12, fontWeight:700 }}>💰 Ingresos del mes</div>
-                  <button onClick={()=>onRegistrar('ingreso')} style={{ fontSize:10, fontWeight:700, color:'white', background:'#16a34a', border:'none', borderRadius:7, padding:'4px 9px', cursor:'pointer' }}>+ Registrar</button>
-                </div>
-                {cobros.length===0 ? (
-                  <div style={{ textAlign:'center', padding:'14px 0', fontSize:12, color:'var(--text3)' }}>Sin ingresos este mes.</div>
-                ) : (
-                  <div style={{ display:'flex', flexDirection:'column', gap:5, maxHeight:200, overflowY:'auto', paddingRight:4 }}>
-                    {cobros.map(c=>(
-                      <div key={c.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:12, color:'var(--text2)', gap:8 }}>
-                        <div style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.nombre||c.descripcion||'Ingreso'}</div>
-                        <div style={{ fontWeight:700, color:'#16a34a', flexShrink:0 }}>{S0(c.monto)}</div>
-                      </div>
-                    ))}
-                    <div style={{ display:'flex', justifyContent:'space-between', padding:'5px 8px', background:'#f0fdf4', borderRadius:7, border:'1px solid #86efac', marginTop:4 }}>
-                      <span style={{ fontSize:11, fontWeight:700, color:'#166534' }}>Total</span>
-                      <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:13, color:'#16a34a' }}>{S0(cobros.reduce((s,c)=>s+Number(c.monto),0))}</span>
-                    </div>
+              {/* Movimientos del mes */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+                <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+                    <div style={{ fontSize:12, fontWeight:700 }}>💰 Ingresos del mes</div>
+                    <button onClick={()=>onRegistrar('ingreso')} style={{ fontSize:10, fontWeight:700, color:'white', background:'#16a34a', border:'none', borderRadius:7, padding:'4px 9px', cursor:'pointer' }}>+ Registrar</button>
                   </div>
-                )}
-              </div>
-
-              <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-                  <div style={{ fontSize:12, fontWeight:700 }}>💸 Gastos del mes</div>
-                  <button onClick={()=>onRegistrar('gasto')} style={{ fontSize:10, fontWeight:700, color:'white', background:'#dc2626', border:'none', borderRadius:7, padding:'4px 9px', cursor:'pointer' }}>+ Registrar</button>
-                </div>
-                {txsGasto.length===0 ? (
-                  <div style={{ textAlign:'center', padding:'14px 0', fontSize:12, color:'var(--text3)' }}>Sin gastos este mes.</div>
-                ) : (
-                  <div style={{ display:'flex', flexDirection:'column', gap:5, maxHeight:200, overflowY:'auto', paddingRight:4 }}>
-                    {txsGasto.map(t=>(
-                      <div key={t.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:12, color:'var(--text2)', gap:8 }}>
-                        <div style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.descripcion||t.categoria||'Gasto'}</div>
-                        <div style={{ fontWeight:700, color:'#dc2626', flexShrink:0 }}>{S0(t.monto)}</div>
+                  {cobros.length===0
+                    ? <div style={{ textAlign:'center', padding:'14px 0', fontSize:12, color:'var(--text3)' }}>Sin ingresos este mes.</div>
+                    : <div style={{ display:'flex', flexDirection:'column', gap:5, maxHeight:200, overflowY:'auto', paddingRight:4 }}>
+                        {cobros.map(c=>(
+                          <div key={c.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:12, color:'var(--text2)', gap:8 }}>
+                            <div style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.nombre||c.descripcion||'Ingreso'}</div>
+                            <div style={{ fontWeight:700, color:'#16a34a', flexShrink:0 }}>{S0(c.monto)}</div>
+                          </div>
+                        ))}
+                        <div style={{ display:'flex', justifyContent:'space-between', padding:'5px 8px', background:'#f0fdf4', borderRadius:7, border:'1px solid #86efac', marginTop:4 }}>
+                          <span style={{ fontSize:11, fontWeight:700, color:'#166534' }}>Total</span>
+                          <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:13, color:'#16a34a' }}>{S0(cobros.reduce((s,c)=>s+Number(c.monto),0))}</span>
+                        </div>
                       </div>
-                    ))}
-                    <div style={{ display:'flex', justifyContent:'space-between', padding:'5px 8px', background:'#fef2f2', borderRadius:7, border:'1px solid #fca5a5', marginTop:4 }}>
-                      <span style={{ fontSize:11, fontWeight:700, color:'#991b1b' }}>Total</span>
-                      <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:13, color:'#dc2626' }}>{S0(txsGasto.reduce((s,t)=>s+Number(t.monto),0))}</span>
-                    </div>
+                  }
+                </div>
+                <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+                    <div style={{ fontSize:12, fontWeight:700 }}>💸 Gastos del mes</div>
+                    <button onClick={()=>onRegistrar('gasto')} style={{ fontSize:10, fontWeight:700, color:'white', background:'#dc2626', border:'none', borderRadius:7, padding:'4px 9px', cursor:'pointer' }}>+ Registrar</button>
                   </div>
-                )}
+                  {txsGasto.length===0
+                    ? <div style={{ textAlign:'center', padding:'14px 0', fontSize:12, color:'var(--text3)' }}>Sin gastos este mes.</div>
+                    : <div style={{ display:'flex', flexDirection:'column', gap:5, maxHeight:200, overflowY:'auto', paddingRight:4 }}>
+                        {txsGasto.map(t=>(
+                          <div key={t.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:12, color:'var(--text2)', gap:8 }}>
+                            <div style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.descripcion||t.categoria||'Gasto'}</div>
+                            <div style={{ fontWeight:700, color:'#dc2626', flexShrink:0 }}>{S0(t.monto)}</div>
+                          </div>
+                        ))}
+                        <div style={{ display:'flex', justifyContent:'space-between', padding:'5px 8px', background:'#fef2f2', borderRadius:7, border:'1px solid #fca5a5', marginTop:4 }}>
+                          <span style={{ fontSize:11, fontWeight:700, color:'#991b1b' }}>Total</span>
+                          <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:13, color:'#dc2626' }}>{S0(txsGasto.reduce((s,t)=>s+Number(t.monto),0))}</span>
+                        </div>
+                      </div>
+                  }
+                </div>
               </div>
 
-            </div>
-          </div>
+            </Seccion>
 
-        </div>
-      </div>
+            {/* ══ SECCIÓN 3: DEUDAS ══ */}
+            <Seccion titulo="💳 Deudas" monto={S0(kpiDeudas)} colorMonto="#dc2626" colorBorde="#fca5a5">
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+
+                <KpiCard titulo="📋 Préstamos activos" monto={S0(deudas.filter(d=>d.direccion!=='me_deben').reduce((s,d)=>s+Number(d.monto_pendiente||0),0))}
+                  colorBg="#fef2f2" colorBorde="#fca5a5" colorTitulo="#991b1b" colorMonto="#ef4444"
+                  onNavigate={()=>onNavigate('deudas')}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:10 }}>
+                    {deudas.filter(d=>d.direccion!=='me_deben').length===0
+                      ? <div style={{ fontSize:11, color:'var(--text3)', textAlign:'center', padding:'8px 0' }}>Sin deudas activas 🎉</div>
+                      : deudas.filter(d=>d.direccion!=='me_deben').map(d => {
+                          const pct = d.total_cuotas>0 ? Math.round((d.cuotas_pagadas/d.total_cuotas)*100) : null
+                          return (
+                            <div key={d.id} style={{ padding:'7px 9px', borderRadius:8, background:'white', border:'1px solid #fecaca' }}>
+                              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6, marginBottom:pct!==null?3:0 }}>
+                                <div style={{ fontSize:11, fontWeight:600, color:'#991b1b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>{d.nombre}</div>
+                                <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:11, color:'#ef4444', flexShrink:0 }}>{S0(d.monto_pendiente||d.monto_cuota||0)}</div>
+                              </div>
+                              {pct!==null && <div style={{ height:3, background:'#fee2e2', borderRadius:99, overflow:'hidden' }}><div style={{ height:'100%', width:`${pct}%`, background:'#ef4444', borderRadius:99 }}/></div>}
+                              {d.es_en_cuotas&&d.total_cuotas>0 && <div style={{ fontSize:9, color:'#991b1b', marginTop:2, opacity:0.7 }}>{d.cuotas_pagadas}/{d.total_cuotas} cuotas · {pct}%</div>}
+                            </div>
+                          )
+                        })
+                    }
+                  </div>
+                </KpiCard>
+
+                <KpiCard titulo="💳 Tarjetas crédito" monto={S0(tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).reduce((s,t)=>s+Number(t.deuda_actual||0),0))}
+                  colorBg="#fef2f2" colorBorde="#fca5a5" colorTitulo="#991b1b" colorMonto="#dc2626"
+                  onNavigate={()=>onNavigate('tarjetas')}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:10 }}>
+                    {tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).length===0
+                      ? <div style={{ fontSize:11, color:'var(--text3)', textAlign:'center', padding:'8px 0' }}>Sin tarjetas de crédito</div>
+                      : tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).map(t => {
+                          const pct = t.limite_credito>0 ? Math.min(Math.round((t.deuda_actual/t.limite_credito)*100),100) : 0
+                          const colorBarra = pct>=90?'#ef4444':pct>=70?'#f97316':'#22c55e'
+                          const color = t.color||'#dc2626'
+                          const diasCorte = t.fecha_corte ? diasHasta(t.fecha_corte) : null
+                          return (
+                            <div key={t.id} style={{ padding:'7px 9px', borderRadius:8, background:'white', border:`1px solid ${color}30` }}>
+                              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6, marginBottom:t.limite_credito>0?3:0 }}>
+                                <div style={{ display:'flex', alignItems:'center', gap:5, flex:1, minWidth:0 }}>
+                                  <div style={{ width:6, height:6, borderRadius:'50%', background:color, flexShrink:0 }}/>
+                                  <div style={{ fontSize:11, fontWeight:600, color:'var(--text2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.nombre_banco}{t.numero?` ···${t.numero}`:''}</div>
+                                </div>
+                                <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:11, color:'#dc2626', flexShrink:0 }}>{S0(t.deuda_actual||0)}</div>
+                              </div>
+                              {t.limite_credito>0 && (
+                                <>
+                                  <div style={{ height:3, background:'var(--bg)', borderRadius:99, overflow:'hidden', marginBottom:2 }}><div style={{ height:'100%', width:`${pct}%`, background:colorBarra, borderRadius:99 }}/></div>
+                                  <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'var(--text3)' }}>
+                                    <span>{pct}% · límite {S0(t.limite_credito)}</span>
+                                    {diasCorte!==null && <span style={{ color:diasCorte<=5?'#f97316':'var(--text3)', fontWeight:diasCorte<=5?700:400 }}>{diasCorte===0?'Corte hoy':diasCorte<0?'Cortó hace '+Math.abs(diasCorte)+'d':'Corte en '+diasCorte+'d'}</span>}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )
+                        })
+                    }
+                  </div>
+                </KpiCard>
+
+              </div>
+            </Seccion>
+
+          </>
+        )
+      })()}
 
       {/* ══ ACCIONES RÁPIDAS ══ */}
       <div className="chips">
@@ -723,6 +808,60 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
         ))}
       </div>
 
+    </div>
+  )
+}
+function TogglePagados({ count, children }) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <>
+      <button onClick={()=>setOpen(v=>!v)}
+        style={{ width:'100%', padding:'5px 0', fontSize:10, fontWeight:700, color:'#16a34a', background:'#f0fdf4', border:'1px solid #86efac', borderRadius:7, cursor:'pointer', marginBottom:open?6:0 }}>
+        {open ? '▲ Ocultar' : `✅ Ver hechos (${count})`}
+      </button>
+      {open && <div style={{ display:'flex', flexDirection:'column', gap:4 }}>{children}</div>}
+    </>
+  )
+}
+
+// Sección colapsable con header clicable
+function Seccion({ titulo, subtitulo, monto, colorMonto='var(--text)', colorBorde='var(--border)', defaultOpen=true, onHeaderClick, children }) {
+  const [open, setOpen] = React.useState(defaultOpen)
+  return (
+    <div style={{ background:'white', borderRadius:16, border:`1.5px solid ${colorBorde}`, marginBottom:14, boxShadow:'0 2px 8px rgba(0,0,0,0.04)', overflow:'hidden' }}>
+      <div onClick={()=>setOpen(v=>!v)} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'13px 16px', cursor:'pointer', userSelect:'none', background:open?'white':'var(--bg)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div>
+            <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, color:'var(--text)', lineHeight:1.2 }}>{titulo}</div>
+            {subtitulo && <div style={{ fontSize:11, color:'var(--text3)', fontWeight:600, marginTop:1 }}>{subtitulo}</div>}
+          </div>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          {monto!==undefined && <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:15, color:colorMonto }}>{monto}</span>}
+          <span style={{ fontSize:11, color:'var(--text3)', transform:open?'rotate(0deg)':'rotate(-90deg)', transition:'transform 0.2s', display:'inline-block' }}>▾</span>
+        </div>
+      </div>
+      {open && <div style={{ padding:'0 16px 16px' }}>{children}</div>}
+    </div>
+  )
+}
+
+// Tarjeta colapsable: título + monto visible siempre, detalle con click; navegación con click en header
+function KpiCard({ titulo, monto, colorBg, colorBorde, colorTitulo, colorMonto, onNavigate: nav, children }) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <div style={{ background:colorBg, border:`1.5px solid ${colorBorde}`, borderRadius:14, overflow:'hidden', cursor:'pointer' }}>
+      <div onClick={()=>setOpen(v=>!v)} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 14px' }}>
+        <div style={{ display:'flex', flexDirection:'column', gap:1 }}>
+          <span style={{ fontSize:10, fontWeight:700, color:colorTitulo, textTransform:'uppercase', letterSpacing:'0.5px' }}>{titulo}</span>
+          <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:20, color:colorMonto, letterSpacing:'-0.5px', lineHeight:1 }}>{monto}</span>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          {nav && <button onClick={e=>{ e.stopPropagation(); nav() }} style={{ fontSize:9, fontWeight:700, padding:'3px 9px', borderRadius:20, border:`1.5px solid ${colorBorde}`, background:'white', color:colorTitulo, cursor:'pointer', whiteSpace:'nowrap' }}>Ver →</button>}
+          <span style={{ fontSize:11, color:colorTitulo, opacity:0.6, transform:open?'rotate(0deg)':'rotate(-90deg)', transition:'transform 0.2s', display:'inline-block' }}>▾</span>
+        </div>
+      </div>
+      {open && <div style={{ padding:'0 14px 12px', borderTop:`1px dashed ${colorBorde}` }}>{children}</div>}
     </div>
   )
 }
