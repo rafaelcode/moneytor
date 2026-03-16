@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { fmt, fmtFecha, TIPO_MAP, TIPOS_CUENTA, ICONO_MOV } from '../lib/cuentasUtils'
+import {
+  fmt, fmtFecha, fmtCCI, TIPO_MAP, TIPOS_CUENTA, ICONO_MOV,
+  CLASIFICACION_MAP, calcularSaldoRealCuentas, calcularPatrimonioIntangible,
+} from '../lib/cuentasUtils'
 import CuentaForm from '../components/CuentaForm'
 import MovimientoCuentaForm from '../components/MovimientoCuentaForm'
 
@@ -16,6 +19,19 @@ function KpiCard({ emoji, label, value, sub, color, bg }) {
       <div style={{ fontFamily: 'Nunito', fontWeight: 900, fontSize: 22, color, letterSpacing: '-0.5px', marginBottom: 3 }}>{value}</div>
       <div style={{ fontSize: 11, fontWeight: 600, color: `${color}99` }}>{sub}</div>
     </div>
+  )
+}
+
+// ── Badge de clasificación ────────────────────────────────
+function ClasifBadge({ clasificacion }) {
+  const c = CLASIFICACION_MAP[clasificacion] || CLASIFICACION_MAP['disponible']
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 20,
+      background: c.bg, color: c.color,
+    }}>
+      {c.emoji} {c.label}
+    </span>
   )
 }
 
@@ -57,6 +73,12 @@ function CuentaCard({ cuenta, onEdit, onMovimiento, onDelete, onToggleDetalle, m
               {cuenta.numero_cuenta && <span style={{ marginLeft: 6, fontFamily: 'monospace' }}>···{cuenta.numero_cuenta.slice(-4)}</span>}
               {cuenta.numero_telefono && <span style={{ marginLeft: 6 }}>{cuenta.numero_telefono}</span>}
             </div>
+            {/* CCI si existe */}
+            {cuenta.cci && (
+              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, fontFamily: 'monospace' }}>
+                CCI: {fmtCCI(cuenta.cci)}
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, marginLeft: 8 }}>
             <span style={{
@@ -65,11 +87,13 @@ function CuentaCard({ cuenta, onEdit, onMovimiento, onDelete, onToggleDetalle, m
             }}>
               {tipo.label}
             </span>
-            <span style={{
-              fontSize: 10, fontWeight: 600, color: 'var(--text3)',
-            }}>
+            <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text3)' }}>
               {cuenta.moneda}
             </span>
+            {/* Badge de clasificación */}
+            {cuenta.clasificacion_saldo && cuenta.clasificacion_saldo !== 'disponible' && (
+              <ClasifBadge clasificacion={cuenta.clasificacion_saldo} />
+            )}
           </div>
         </div>
 
@@ -82,6 +106,12 @@ function CuentaCard({ cuenta, onEdit, onMovimiento, onDelete, onToggleDetalle, m
             <div style={{ fontFamily: 'Nunito', fontWeight: 900, fontSize: 18, color }}>
               {fmt(cuenta.saldo_actual, cuenta.moneda)}
             </div>
+            {/* Indicador si NO es dinero inmediato */}
+            {cuenta.es_dinero_inmediato === false && (
+              <div style={{ fontSize: 10, color: '#7c3aed', fontWeight: 600, marginTop: 2 }}>
+                🔒 No suma al saldo disponible
+              </div>
+            )}
           </div>
           {esCredito && (
             <div style={{ background: '#fef2f2', borderRadius: 10, padding: '10px 12px' }}>
@@ -184,7 +214,6 @@ function CuentaCard({ cuenta, onEdit, onMovimiento, onDelete, onToggleDetalle, m
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {historial.map(m => {
                 const ic = ICONO_MOV[m.tipo] || { e: '·', c: 'var(--text3)', label: m.tipo }
-                const esPositivo = ['deposito', 'quincena', 'pago'].includes(m.tipo)
                 return (
                   <div key={m.id} style={{
                     display: 'flex', alignItems: 'center', gap: 10,
@@ -260,6 +289,7 @@ export default function Cuentas({ usuarioId }) {
       .select('*')
       .eq('usuario_id', usuarioId)
       .eq('activa', true)
+      .neq('tipo', 'efectivo')
       .order('creado_en', { ascending: true })
     setCuentas(data || [])
     setCargando(false)
@@ -297,12 +327,20 @@ export default function Cuentas({ usuarioId }) {
     cargar()
   }
 
-  // ── Cálculos ──────────────────────────────────────────
+  // ── Cálculos KPI ──────────────────────────────────────
   const sueldo   = cuentas.filter(c => c.tipo === 'sueldo')
   const ahorro   = cuentas.filter(c => c.tipo === 'ahorro_digital')
   const billeter = cuentas.filter(c => c.tipo === 'billetera_digital')
+  const efectivo = cuentas.filter(c => c.tipo === 'efectivo')
   const corrient = cuentas.filter(c => c.tipo === 'corriente')
   const creditos = cuentas.filter(c => c.tipo === 'credito_entidad')
+
+  // Saldo real = solo cuentas con es_dinero_inmediato = true (o null, retrocompatible)
+  const saldoReal         = calcularSaldoRealCuentas(cuentas)
+  // Patrimonio intangible = cuentas marcadas como NO dinero inmediato
+  const patrimonioIntang  = calcularPatrimonioIntangible(cuentas)
+  const totalDeuda        = creditos.reduce((s, c) => s + Number(c.deuda_actual || 0), 0)
+  const totalBilleteras   = billeter.reduce((s, c) => s + Number(c.saldo_actual || 0), 0)
 
   const FILTROS = [
     { v: 'todas',            label: `Todas (${cuentas.length})` },
@@ -315,40 +353,47 @@ export default function Cuentas({ usuarioId }) {
 
   const lista = filtro === 'todas' ? cuentas : cuentas.filter(c => c.tipo === filtro)
 
-  const totalDisponible = cuentas.filter(c => c.tipo !== 'credito_entidad').reduce((s, c) => s + Number(c.saldo_actual || 0), 0)
-  const totalSueldo     = sueldo.reduce((s, c) => s + Number(c.saldo_actual || 0), 0)
-  const totalBilleteras = billeter.reduce((s, c) => s + Number(c.saldo_actual || 0), 0)
-  const totalDeuda      = creditos.reduce((s, c) => s + Number(c.deuda_actual || 0), 0)
-
-  // Distribución por tipo para la barra
-  const COLORES_TIPO = { sueldo: '#16a34a', ahorro_digital: '#2563eb', billetera_digital: '#7c3aed', corriente: '#0891b2', credito_entidad: '#dc2626' }
-  const distribucion = TIPOS_CUENTA.map(t => ({
-    ...t,
-    total: cuentas.filter(c => c.tipo === t.valor && c.tipo !== 'credito_entidad').reduce((s, c) => s + Number(c.saldo_actual || 0), 0),
-    count: cuentas.filter(c => c.tipo === t.valor).length,
-  })).filter(t => t.count > 0 && t.total > 0)
+  // Distribución por tipo para la barra (solo cuentas con dinero inmediato)
+  const COLORES_TIPO = { sueldo: '#16a34a', ahorro_digital: '#2563eb', billetera_digital: '#7c3aed', efectivo: '#15803d', corriente: '#0891b2' }
+  const distribucion = TIPOS_CUENTA
+    .filter(t => t.valor !== 'credito_entidad')
+    .map(t => ({
+      ...t,
+      total: cuentas
+        .filter(c => c.tipo === t.valor && c.es_dinero_inmediato !== false)
+        .reduce((s, c) => s + Number(c.saldo_actual || 0), 0),
+      count: cuentas.filter(c => c.tipo === t.valor).length,
+    }))
+    .filter(t => t.count > 0 && t.total > 0)
 
   return (
     <div style={{ padding: 28 }}>
 
       {/* ── KPIs ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 24 }}>
-        <KpiCard emoji="💰" label="Total disponible" value={fmt(totalDisponible)}
+        {/* KPI 1: Saldo real disponible (solo dinero inmediato) */}
+        <KpiCard emoji="💰" label="Saldo real disponible" value={fmt(saldoReal)}
           color="#16a34a" bg="#f0fdf4"
-          sub={`${cuentas.filter(c => c.tipo !== 'credito_entidad').length} cuenta${cuentas.length !== 1 ? 's' : ''}`} />
-        <KpiCard emoji="💼" label="En cuentas sueldo" value={fmt(totalSueldo)}
-          color="#16a34a" bg="#f0fdf4"
-          sub={`${sueldo.length} cuenta${sueldo.length !== 1 ? 's' : ''} sueldo`} />
+          sub={`${cuentas.filter(c => c.es_dinero_inmediato !== false && c.tipo !== 'credito_entidad').length} cuenta(s) activas`} />
+
+        {/* KPI 2: Patrimonio intangible/bloqueado */}
+        <KpiCard emoji="🔒" label="Ahorros / Reservas" value={fmt(patrimonioIntang)}
+          color="#7c3aed" bg="#f5f3ff"
+          sub="CTS, plazo fijo, fondos reservados" />
+
+        {/* KPI 3: Billeteras digitales */}
         <KpiCard emoji="📱" label="En billeteras" value={fmt(totalBilleteras)}
           color="#7c3aed" bg="#f5f3ff"
-          sub={`Yape, Plin y otros`} />
+          sub="Yape, Plin y otros" />
+
+        {/* KPI 4: Deuda en créditos */}
         <KpiCard emoji="🏛️" label="Deuda entidades" value={fmt(totalDeuda)}
           color={totalDeuda > 0 ? '#dc2626' : '#16a34a'}
           bg={totalDeuda > 0 ? '#fef2f2' : '#f0fdf4'}
           sub={`${creditos.length} línea${creditos.length !== 1 ? 's' : ''} de crédito`} />
       </div>
 
-      {/* ── Distribución ── */}
+      {/* ── Distribución de saldo real ── */}
       {distribucion.length > 1 && (
         <div style={{
           background: 'white', borderRadius: 16,
@@ -357,11 +402,11 @@ export default function Cuentas({ usuarioId }) {
           boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
         }}>
           <div style={{ fontFamily: 'Nunito', fontWeight: 900, fontSize: 14, marginBottom: 12 }}>
-            📊 Distribución de saldos
+            📊 Distribución de saldo disponible
           </div>
           <div style={{ display: 'flex', gap: 0, height: 10, borderRadius: 999, overflow: 'hidden', marginBottom: 12, background: 'var(--bg)' }}>
             {distribucion.map(t => {
-              const pct = totalDisponible > 0 ? (t.total / totalDisponible) * 100 : 0
+              const pct = saldoReal > 0 ? (t.total / saldoReal) * 100 : 0
               return pct > 0 ? (
                 <div key={t.valor} style={{ width: `${pct}%`, background: COLORES_TIPO[t.valor] || t.color, minWidth: 4, transition: 'width 0.5s' }} />
               ) : null

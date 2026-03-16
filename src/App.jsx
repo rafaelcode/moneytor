@@ -18,6 +18,7 @@ import Presupuesto         from './pages/Presupuesto'
 import Inversiones         from './pages/Inversiones'
 import Tarjetas            from './pages/Tarjetas'
 import Cuentas             from './pages/Cuentas'
+import Efectivo            from './pages/Efectivo'
 import TransactionForm     from './components/TransactionForm'
 
 /* ── Bottom nav (5 más usados) ───────────────────────────── */
@@ -136,6 +137,7 @@ export default function App() {
     prestamos:          <Prestamos        usuarioId={usuario.id} />,
 
     // ── 🟪 RELACIONES FINANCIERAS ──────────────────────────
+    efectivo:           <Efectivo         usuarioId={usuario.id} />,
     tarjetas:           <Tarjetas         usuarioId={usuario.id} />,
     cuentas:            <Cuentas          usuarioId={usuario.id} />,
 

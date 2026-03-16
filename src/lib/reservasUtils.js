@@ -46,8 +46,8 @@ export const TIPO_MAP = Object.fromEntries(TIPOS_RESERVA.map(t => [t.valor, t]))
 
 export const BANCOS_PERU = [
   'BCP', 'BBVA', 'Interbank', 'Scotiabank', 'BanBif',
-  'Banco Pichincha', 'Mibanco', 'Banco GNB', 'Banco Falabella',
-  'Banco Ripley', 'Banco Santander', 'BCRP', 'Otro',
+  'Banco de la Nación', 'Banco Pichincha', 'Mibanco', 'Banco GNB',
+  'Banco Falabella', 'Banco Ripley', 'Banco Santander', 'Caja Metropolitana de Lima', 'Cooperativa San Cristóbal',
 ]
 
 // ── Formateo ─────────────────────────────────────────────

@@ -19,6 +19,8 @@ const PAGE_INFO = {
   reportes:                { titulo:'Reportes',              color:'var(--gray-600)', btn:'📥 Exportar' },
   configuracion:           { titulo:'Configuración',         color:'var(--primary-blue)', btn:'Guardar' },
   tarjetas:                { titulo:'Tarjetas',              color:'var(--red-alert)', btn:'+ Tarjeta' },
+  cuentas:                 { titulo:'Cuentas bancarias',      color:'var(--primary-blue)', btn:'+ Cuenta' },
+  efectivo:                { titulo:'Efectivo',               color:'var(--success-green)', btn:'+ Billetera' },
 }
 
 export default function Topbar({ currentPage, onRegistrar, onCerrarSesion, email, onMenuOpen }) {

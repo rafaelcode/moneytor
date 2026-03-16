@@ -28,8 +28,9 @@ const MENU = [
     id: 'relaciones', label: 'RELACIONES FINANCIERAS',
     color: '#7c3aed',
     items: [
-      { id: 'tarjetas', emoji: '💳', label: 'Tarjetas' },
+      { id: 'efectivo', emoji: '💵', label: 'Efectivo' },
       { id: 'cuentas',  emoji: '🏦', label: 'Cuentas bancarias' },
+      { id: 'tarjetas', emoji: '💳', label: 'Tarjetas' },
     ],
   },
   {
