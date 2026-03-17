@@ -414,7 +414,7 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
 
   if (cargando) return (
     <div className="page">
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+      <div className="g2" style={{ gap:10 }}>
         {[1,2,3,4,5,6].map(i=>(
           <div key={i} className="skeleton" style={{ height:i<=2?100:160, gridColumn:i>4?'span 2':'span 1' }}/>
         ))}
@@ -433,14 +433,15 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
         const colorLibre = saldoLibre >= 0 ? '#16a34a' : '#dc2626'
         return (
           <>
-            <Seccion titulo="💵 Saldo actual" colorBorde="#86efac">
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <Seccion titulo="💵 Saldo actual" colorBorde="#86efac" colorHeader="#22c55e">
+              <div className="g2">
 
                 <KpiCard titulo="💵 Saldo disponible" monto={S0(kpiDisponible)}
                   colorBg="linear-gradient(135deg,#f0fdf4,#dcfce7)" colorBorde="#86efac"
                   colorTitulo="#166534" colorMonto="#16a34a"
+                  defaultOpen={true}
                   onNavigate={()=>onNavigate('cuentas')}>
-                  <div style={{ display:'flex', flexDirection:'column', gap:4, marginTop:10 }}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
                     {cuentas.filter(c => c.tipo !== 'credito_entidad' && c.es_dinero_inmediato !== false).map(c => {
                       const destino = c.tipo === 'efectivo' ? 'efectivo' : 'cuentas'
                       const emoji = c.tipo==='sueldo'?'💼':c.tipo==='ahorro_digital'?'🏦':c.tipo==='billetera_digital'?'📱':c.tipo==='corriente'?'🔄':c.tipo==='efectivo'?'💵':'🏦'
@@ -461,8 +462,9 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
                 <KpiCard titulo="⚠️ Deudas" monto={S0(kpiDeudas)}
                   colorBg="linear-gradient(135deg,#fef2f2,#fee2e2)" colorBorde="#fca5a5"
                   colorTitulo="#991b1b" colorMonto="#dc2626"
+                  defaultOpen={true}
                   onNavigate={()=>onNavigate('deudas')}>
-                  <div style={{ display:'flex', flexDirection:'column', gap:4, marginTop:10 }}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
                     {deudas.filter(d=>!pagosHechos[`d_${d.id}`]).map(d => (
                       <div key={d.id} style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#991b1b' }}>
                         <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:100 }}>📋 {d.nombre}</span>
@@ -470,7 +472,12 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
                       </div>
                     ))}
                     {tarjetas.filter(t=>(t.tipo==='credito'||!t.tipo)&&Number(t.deuda_actual||0)>0).map(t => (
-                      <div key={t.id} style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#991b1b' }}>
+                      <div key={t.id}
+                        onClick={e=>{ e.stopPropagation(); onNavigate('tarjetas', { abrirMovimiento: t }) }}
+                        style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#991b1b', cursor:'pointer', padding:'2px 4px', borderRadius:4, transition:'background 0.15s' }}
+                        onMouseEnter={e=>e.currentTarget.style.background='#fee2e2'}
+                        onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+                      >
                         <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:100 }}>💳 {t.nombre_banco}{t.numero?` ···${t.numero}`:''}</span>
                         <span style={{ fontFamily:'Nunito', fontWeight:800, flexShrink:0 }}>{S0(t.deuda_actual)}</span>
                       </div>
@@ -486,7 +493,7 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
             <Seccion
               titulo="📅 Flujo mensual"
               subtitulo={`${MESES[hoy.getMonth()]} ${anioAct} · ${hoy.toLocaleDateString('es-PE',{weekday:'long', day:'numeric'})}`}
-              colorBorde="#c4b5fd"
+              colorBorde="#c4b5fd" colorHeader="#8b5cf6"
             >
               {/* Botón ver detalle */}
               <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
@@ -496,13 +503,13 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
               </div>
 
               {/* Tarjetas Saldo mes + Saldo libre */}
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
+              <div className="g2" style={{ marginBottom:12 }}>
 
                 <KpiCard titulo="💰 Saldo del mes" monto={S0(saldoMes)}
                   colorBg="linear-gradient(135deg,#eff6ff,#dbeafe)" colorBorde="#93c5fd"
                   colorTitulo="#1e40af" colorMonto="#2563eb"
                   onNavigate={()=>onNavigate('cuentas')}>
-                  <div style={{ display:'flex', flexDirection:'column', gap:4, marginTop:10 }}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
                     <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#1e40af' }}><span>💵 Disponible hoy</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(kpiDisponible)}</span></div>
                     {porCobrar>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#64748b' }}><span>⏳ Por cobrar</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>+{S0(porCobrar)}</span></div>}
                     {recConEstado.length>0 && (
@@ -522,17 +529,28 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
                   colorBg={saldoLibre>=0?'linear-gradient(135deg,#f0fdf4,#dcfce7)':'linear-gradient(135deg,#fff1f2,#ffe4e6)'}
                   colorBorde={saldoLibre>=0?'#86efac':'#fca5a5'}
                   colorTitulo={saldoLibre>=0?'#166534':'#991b1b'} colorMonto={colorLibre}>
-                  <div style={{ display:'flex', flexDirection:'column', gap:4, marginTop:10 }}>
-                    <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'var(--text3)' }}><span>💰 Saldo del mes</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{S0(saldoMes)}</span></div>
-                    <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'var(--text3)' }}><span>💸 Gastos</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>-{S0(kpiGastos)}</span></div>
-                    <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'var(--text3)' }}><span>💳 Obligaciones</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>-{S0(totalObligacionesPeriodo)}</span></div>
-                    {totalPres>0 && <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'var(--text3)' }}><span>📊 Del presupuesto</span><span style={{ fontFamily:'Nunito', fontWeight:800 }}>{Math.round((kpiGastos/totalPres)*100)}%</span></div>}
+                  <div style={{ display:'flex', flexDirection:'column', gap:5, marginTop:8 }}>
+                    {[
+                      { label:'💰 Saldo del mes', val:S0(saldoMes), prefix:'' },
+                      { label:'💸 Gastos',         val:S0(kpiGastos), prefix:'-' },
+                      { label:'💳 Obligaciones',   val:S0(totalObligacionesPeriodo), prefix:'-' },
+                      ...(totalPres>0?[{ label:'📊 Presupuesto usado', val:Math.round((kpiGastos/totalPres)*100)+'%', prefix:'' }]:[]),
+                    ].map((row,i,arr) => (
+                      <div key={row.label} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:10,
+                        color: saldoLibre>=0 ? '#166534' : '#991b1b',
+                        paddingBottom: i<arr.length-1 ? 4 : 0,
+                        borderBottom: i<arr.length-1 ? `1px dashed ${saldoLibre>=0?'#86efac':'#fca5a5'}` : 'none',
+                      }}>
+                        <span style={{ fontWeight:600, opacity:0.8 }}>{row.label}</span>
+                        <span style={{ fontFamily:'Nunito', fontWeight:800 }}>{row.prefix}{row.val}</span>
+                      </div>
+                    ))}
                   </div>
                 </KpiCard>
               </div>
 
               {/* Ingresos fijos + Pagos del mes */}
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
+              <div className="g2" style={{ marginBottom:12 }}>
 
                 {/* Ingresos fijos */}
                 {(() => {
@@ -677,7 +695,7 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
               </div>
 
               {/* Movimientos del mes */}
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <div className="g2">
                 <div style={{ background:'var(--bg)', borderRadius:12, padding:12, border:'1px solid var(--border)' }}>
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
                     <div style={{ fontSize:12, fontWeight:700 }}>💰 Ingresos del mes</div>
@@ -725,13 +743,13 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
             </Seccion>
 
             {/* ══ SECCIÓN 3: DEUDAS ══ */}
-            <Seccion titulo="💳 Deudas" monto={S0(kpiDeudas)} colorMonto="#dc2626" colorBorde="#fca5a5">
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <Seccion titulo="💳 Deudas" monto={S0(kpiDeudas)} colorMonto="#dc2626" colorBorde="#fca5a5" colorHeader="#ef4444">
+              <div className="g2">
 
                 <KpiCard titulo="📋 Préstamos activos" monto={S0(deudas.filter(d=>d.direccion!=='me_deben').reduce((s,d)=>s+Number(d.monto_pendiente||0),0))}
                   colorBg="#fef2f2" colorBorde="#fca5a5" colorTitulo="#991b1b" colorMonto="#ef4444"
                   onNavigate={()=>onNavigate('deudas')}>
-                  <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:10 }}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
                     {deudas.filter(d=>d.direccion!=='me_deben').length===0
                       ? <div style={{ fontSize:11, color:'var(--text3)', textAlign:'center', padding:'8px 0' }}>Sin deudas activas 🎉</div>
                       : deudas.filter(d=>d.direccion!=='me_deben').map(d => {
@@ -754,7 +772,7 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
                 <KpiCard titulo="💳 Tarjetas crédito" monto={S0(tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).reduce((s,t)=>s+Number(t.deuda_actual||0),0))}
                   colorBg="#fef2f2" colorBorde="#fca5a5" colorTitulo="#991b1b" colorMonto="#dc2626"
                   onNavigate={()=>onNavigate('tarjetas')}>
-                  <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:10 }}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
                     {tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).length===0
                       ? <div style={{ fontSize:11, color:'var(--text3)', textAlign:'center', padding:'8px 0' }}>Sin tarjetas de crédito</div>
                       : tarjetas.filter(t=>t.tipo==='credito'||!t.tipo).map(t => {
@@ -763,13 +781,21 @@ export default function Dashboard({ usuarioId, onNavigate, onRegistrar }) {
                           const color = t.color||'#dc2626'
                           const diasCorte = t.fecha_corte ? diasHasta(t.fecha_corte) : null
                           return (
-                            <div key={t.id} style={{ padding:'7px 9px', borderRadius:8, background:'white', border:`1px solid ${color}30` }}>
+                            <div key={t.id}
+                              onClick={()=>onNavigate('tarjetas', { abrirMovimiento: t })}
+                              style={{ padding:'7px 9px', borderRadius:8, background:'white', border:`1px solid ${color}30`, cursor:'pointer', transition:'box-shadow 0.15s' }}
+                              onMouseEnter={e=>e.currentTarget.style.boxShadow=`0 2px 8px ${color}30`}
+                              onMouseLeave={e=>e.currentTarget.style.boxShadow='none'}
+                            >
                               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6, marginBottom:t.limite_credito>0?3:0 }}>
                                 <div style={{ display:'flex', alignItems:'center', gap:5, flex:1, minWidth:0 }}>
                                   <div style={{ width:6, height:6, borderRadius:'50%', background:color, flexShrink:0 }}/>
                                   <div style={{ fontSize:11, fontWeight:600, color:'var(--text2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.nombre_banco}{t.numero?` ···${t.numero}`:''}</div>
                                 </div>
-                                <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:11, color:'#dc2626', flexShrink:0 }}>{S0(t.deuda_actual||0)}</div>
+                                <div style={{ display:'flex', alignItems:'center', gap:5, flexShrink:0 }}>
+                                  <div style={{ fontFamily:'Nunito', fontWeight:800, fontSize:11, color:'#dc2626' }}>{S0(t.deuda_actual||0)}</div>
+                                  <span style={{ fontSize:9, fontWeight:700, color:color, opacity:0.7 }}>Pagar →</span>
+                                </div>
                               </div>
                               {t.limite_credito>0 && (
                                 <>
@@ -825,43 +851,76 @@ function TogglePagados({ count, children }) {
 }
 
 // Sección colapsable con header clicable
-function Seccion({ titulo, subtitulo, monto, colorMonto='var(--text)', colorBorde='var(--border)', defaultOpen=true, onHeaderClick, children }) {
+function Seccion({ titulo, subtitulo, monto, colorMonto='var(--text)', colorBorde='var(--border)', colorHeader, defaultOpen=true, children }) {
   const [open, setOpen] = React.useState(defaultOpen)
+  // Header usa el color de acento fuerte para máximo contraste
+  const hdrBg     = colorHeader || colorBorde
+  const hdrActivo = `${hdrBg}22`   // ~13% opacidad — tinte visible pero suave
   return (
-    <div style={{ background:'white', borderRadius:16, border:`1.5px solid ${colorBorde}`, marginBottom:14, boxShadow:'0 2px 8px rgba(0,0,0,0.04)', overflow:'hidden' }}>
-      <div onClick={()=>setOpen(v=>!v)} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'13px 16px', cursor:'pointer', userSelect:'none', background:open?'white':'var(--bg)' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          <div>
-            <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, color:'var(--text)', lineHeight:1.2 }}>{titulo}</div>
-            {subtitulo && <div style={{ fontSize:11, color:'var(--text3)', fontWeight:600, marginTop:1 }}>{subtitulo}</div>}
-          </div>
+    <div style={{ background:'white', borderRadius:16, border:`1.5px solid ${colorBorde}`, marginBottom:14, boxShadow:'0 2px 8px rgba(0,0,0,0.05)', overflow:'hidden' }}>
+      {/* Header siempre tintado con el color temático */}
+      <div
+        onClick={()=>setOpen(v=>!v)}
+        style={{
+          display:'flex', alignItems:'center', justifyContent:'space-between',
+          padding:'12px 16px', cursor:'pointer', userSelect:'none',
+          background: hdrActivo,
+          borderBottom: open ? `1.5px solid ${colorBorde}` : 'none',
+        }}
+      >
+        <div>
+          <div style={{ fontFamily:'Nunito', fontWeight:900, fontSize:14, color:'var(--text)', lineHeight:1.2 }}>{titulo}</div>
+          {subtitulo && <div style={{ fontSize:11, color:'var(--text3)', fontWeight:600, marginTop:2 }}>{subtitulo}</div>}
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
           {monto!==undefined && <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:15, color:colorMonto }}>{monto}</span>}
-          <span style={{ fontSize:11, color:'var(--text3)', transform:open?'rotate(0deg)':'rotate(-90deg)', transition:'transform 0.2s', display:'inline-block' }}>▾</span>
+          {/* Pill chevron con fondo del color temático */}
+          <div style={{
+            display:'flex', alignItems:'center', gap:4,
+            padding:'3px 9px 3px 7px', borderRadius:20,
+            background: open ? colorBorde : `${colorBorde}40`,
+            border:`1px solid ${colorBorde}`,
+            transition:'background 0.2s',
+          }}>
+            <span style={{
+              fontSize:10, lineHeight:1, display:'inline-block',
+              color: open ? 'white' : 'var(--text2)',
+              transform: open ? 'rotate(0deg)' : 'rotate(-90deg)',
+              transition:'transform 0.2s',
+            }}>▾</span>
+            <span style={{ fontSize:10, fontWeight:700, color: open ? 'white' : 'var(--text2)' }}>
+              {open ? 'Cerrar' : 'Ver'}
+            </span>
+          </div>
         </div>
       </div>
-      {open && <div style={{ padding:'0 16px 16px' }}>{children}</div>}
+      {open && <div style={{ padding:'14px 16px 16px', background:'white' }}>{children}</div>}
     </div>
   )
 }
 
 // Tarjeta colapsable: título + monto visible siempre, detalle con click; navegación con click en header
-function KpiCard({ titulo, monto, colorBg, colorBorde, colorTitulo, colorMonto, onNavigate: nav, children }) {
-  const [open, setOpen] = React.useState(false)
+function KpiCard({ titulo, monto, colorBg, colorBorde, colorTitulo, colorMonto, onNavigate: nav, defaultOpen=false, children }) {
+  const [open, setOpen] = React.useState(defaultOpen)
   return (
-    <div style={{ background:colorBg, border:`1.5px solid ${colorBorde}`, borderRadius:14, overflow:'hidden', cursor:'pointer' }}>
+    <div style={{ background:colorBg, border:`1.5px solid ${colorBorde}`, borderRadius:14, overflow:'hidden', cursor:'pointer', boxShadow:'0 1px 4px rgba(0,0,0,0.06)' }}>
       <div onClick={()=>setOpen(v=>!v)} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 14px' }}>
-        <div style={{ display:'flex', flexDirection:'column', gap:1 }}>
-          <span style={{ fontSize:10, fontWeight:700, color:colorTitulo, textTransform:'uppercase', letterSpacing:'0.5px' }}>{titulo}</span>
+        <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+          <span style={{ fontSize:10, fontWeight:800, color:colorTitulo, textTransform:'uppercase', letterSpacing:'0.6px', opacity:0.85 }}>{titulo}</span>
           <span style={{ fontFamily:'Nunito', fontWeight:900, fontSize:20, color:colorMonto, letterSpacing:'-0.5px', lineHeight:1 }}>{monto}</span>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          {nav && <button onClick={e=>{ e.stopPropagation(); nav() }} style={{ fontSize:9, fontWeight:700, padding:'3px 9px', borderRadius:20, border:`1.5px solid ${colorBorde}`, background:'white', color:colorTitulo, cursor:'pointer', whiteSpace:'nowrap' }}>Ver →</button>}
-          <span style={{ fontSize:11, color:colorTitulo, opacity:0.6, transform:open?'rotate(0deg)':'rotate(-90deg)', transition:'transform 0.2s', display:'inline-block' }}>▾</span>
+          {nav && <button onClick={e=>{ e.stopPropagation(); nav() }} style={{ fontSize:9, fontWeight:700, padding:'3px 9px', borderRadius:20, border:`1.5px solid ${colorBorde}`, background:'rgba(255,255,255,0.7)', color:colorTitulo, cursor:'pointer', whiteSpace:'nowrap' }}>Ver →</button>}
+          <div style={{ width:20, height:20, borderRadius:6, background:'rgba(255,255,255,0.5)', border:`1px solid ${colorBorde}`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <span style={{ fontSize:10, color:colorTitulo, transform:open?'rotate(0deg)':'rotate(-90deg)', transition:'transform 0.2s', display:'inline-block', lineHeight:1 }}>▾</span>
+          </div>
         </div>
       </div>
-      {open && <div style={{ padding:'0 14px 12px', borderTop:`1px dashed ${colorBorde}` }}>{children}</div>}
+      {open && (
+        <div style={{ background:'rgba(255,255,255,0.55)', borderTop:`1.5px solid ${colorBorde}`, padding:'10px 14px 13px' }}>
+          {children}
+        </div>
+      )}
     </div>
   )
 }

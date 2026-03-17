@@ -239,7 +239,7 @@ function EmptyState({ filtro, onNueva }) {
 }
 
 // ── Componente principal ──────────────────────────────────
-export default function Tarjetas({ usuarioId }) {
+export default function Tarjetas({ usuarioId, tarjetaInicial = null, onParamsUsed }) {
   const [tarjetas,     setTarjetas]     = useState([])
   const [cargando,     setCargando]     = useState(true)
   const [filtro,       setFiltro]       = useState('credito')
@@ -252,6 +252,17 @@ export default function Tarjetas({ usuarioId }) {
   const [deletingId,   setDeletingId]   = useState(null)
 
   useEffect(() => { cargar() }, [])
+
+  // Abrir modal de movimiento si vienen params desde Dashboard
+  useEffect(() => {
+    if (tarjetaInicial && !cargando) {
+      setMoviendo(tarjetaInicial)
+      // Asegurar que el tab correcto esté activo
+      const esCredito = tarjetaInicial.tipo === 'credito' || !tarjetaInicial.tipo
+      setFiltro(esCredito ? 'credito' : 'debito')
+      if (onParamsUsed) onParamsUsed()
+    }
+  }, [tarjetaInicial, cargando])
 
   async function cargar() {
     setCargando(true)

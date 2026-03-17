@@ -66,6 +66,7 @@ export default function App() {
   const [usuario,     setUsuario]     = useState(null)
   const [cargando,    setCargando]    = useState(true)
   const [page,        setPage]        = useState('dashboard')
+  const [pageParams,  setPageParams]  = useState({})
   const [drawerOpen,  setDrawerOpen]  = useState(false)
   const [mostrarForm, setMostrarForm] = useState(false)
   const [tipoForm,    setTipoForm]    = useState(null)
@@ -79,8 +80,9 @@ export default function App() {
     return () => l.subscription.unsubscribe()
   }, [])
 
-  function navegar(id) {
+  function navegar(id, params = {}) {
     setPage(id)
+    setPageParams(params)
     setDrawerOpen(false)
     setTimeout(() => {
       document.querySelector('.shell-content')?.scrollTo({ top: 0, behavior: 'smooth' })
@@ -138,7 +140,7 @@ export default function App() {
 
     // ── 🟪 RELACIONES FINANCIERAS ──────────────────────────
     efectivo:           <Efectivo         usuarioId={usuario.id} />,
-    tarjetas:           <Tarjetas         usuarioId={usuario.id} />,
+    tarjetas:           <Tarjetas         usuarioId={usuario.id} tarjetaInicial={pageParams.abrirMovimiento || null} onParamsUsed={()=>setPageParams({})} />,
     cuentas:            <Cuentas          usuarioId={usuario.id} />,
 
     // ── 🟧 PATRIMONIO ──────────────────────────────────────

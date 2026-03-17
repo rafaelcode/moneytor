@@ -430,9 +430,12 @@ input, select, textarea {
 .g3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 .g4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
 
-/* FIX: colapso correcto en 360-390px */
+
+/* Mobile: g2 → 1 col hasta 599px, 2 col desde 600px */
+@media (max-width: 599px) {
+  .g2 { grid-template-columns: 1fr; gap: 10px; }
+}
 @media (max-width: 479px) {
-  .g2 { grid-template-columns: 1fr;     gap: 9px; }
   .g3 { grid-template-columns: 1fr 1fr; gap: 9px; }
   .g4 { grid-template-columns: 1fr 1fr; gap: 8px; }
 }

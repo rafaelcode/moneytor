@@ -120,11 +120,34 @@ export default function MovimientoTarjetaForm({ usuarioId, tarjeta, onClose, onG
       }).eq('id', tarjeta.id)
       if (e2) throw e2
 
+      // 3. Registrar como transacción de gasto (cargo) o gasto (pago tarjeta crédito)
+      if (isCredito && accion === 'cargo') {
+        // Cargo = gasto real con la tarjeta de crédito
+        await supabase.from('transacciones').insert({
+          usuario_id:  usuarioId,
+          tipo:        'gasto',
+          monto:       montoN,
+          categoria:   'tarjeta_credito',
+          descripcion: descripcion.trim() || `Cargo ${tarjeta.nombre_banco}${tarjeta.numero ? ` ···${tarjeta.numero}` : ''}`,
+          fecha,
+        })
+      } else if (isCredito && accion === 'pago') {
+        // Pago de tarjeta = gasto (salida de dinero para pagar deuda)
+        await supabase.from('transacciones').insert({
+          usuario_id:  usuarioId,
+          tipo:        'gasto',
+          monto:       montoN,
+          categoria:   'pago_tarjeta',
+          descripcion: descripcion.trim() || `Pago tarjeta ${tarjeta.nombre_banco}${tarjeta.numero ? ` ···${tarjeta.numero}` : ''}`,
+          fecha,
+        })
+      }
+
       onGuardado()
       onClose()
     } catch (err) {
       console.error(err)
-      setError('Error al registrar. Verifica que la tabla movimientos_tarjeta exista.')
+      setError('Error al registrar el movimiento. Intenta de nuevo.')
     } finally {
       setLoading(false)
     }
